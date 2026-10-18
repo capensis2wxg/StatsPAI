@@ -1,0 +1,179 @@
+# StatsPAI · Rust HDFE 内层内核验证（0.9.5 之后的路线）
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计（尚未实现）
+
+> 本规范把第 8 节的 Rust 承诺转化为一份具体的分阶段计划。v0.9.5 只发布
+> 基准测试框架和设计方案；真正的 PyO3 crate 与 wheel 构建 CI 落在一个专门
+> 分支上，范围划到 1.0。
+
+## 1. 为什么（再一次）选择 Rust
+
+Numba-JIT（v0.9.3）把 HDFE 吸收变换的速度提升到纯 NumPy 基线的约 3 倍
+（在 20 万行 × 3 个固定效应 × 2 个回归变量的设计下）。对 90% 的应用计量
+工作负载（1 万 → 500 万行）这已经够用。但**不足以**在 ≥1000 万行的面板上
+追上 `fixest` —— 那里 Bergé 的 C++ + OpenMP 引擎是多线程运行、内层循环
+已向量化的。
+
+numba 路径上剩下的三处瓶颈：
+
+1. 交替投影外层循环的 **Python 层编排**（每次迭代有少量 GIL 开销）。
+2. 每个固定效应轮次内部的**单线程**去均值 —— numba 的 `@njit` 不会自动
+   并行，除非我们加 `prange`，而这又会在吸收器里引发 GIL 争用。
+3. 在 Apple Silicon / Windows MSVC 交叉编译下**无法保证 SIMD** —— numba
+   的 SIMD 支持取决于 LLVM 版本。
+
+Rust + PyO3 + Rayon 用一套工具链同时解决这三个问题。
+
+## 2. 移植目标
+
+| 目标 | 指标 |
+|---|---|
+| 100 万行 × 3 固定效应 × 2 回归变量面板的速度 | ≥ numba 基线的 5 倍 |
+| 1000 万行 × 3 固定效应 × 5 回归变量面板的速度 | 与 fixest 相差在 20% 以内 |
+| 正确性 | 在 16 个以上 DGP 上与 numba 的 β̂ 和残差逐位一致 |
+| 跨平台 wheel | macOS arm64、macOS x86_64、Linux x86_64、Linux arm64、Windows x86_64 |
+| 回退 | 纯 Python 路径保持可用 —— 没有 Rust wheel 的用户仍能正常工作 |
+
+## 3. 分阶段
+
+**阶段 0 —— 基准框架（本次发布，v0.9.5）。**
+发布 `statspai.fast.bench`，这样我们可以在 NumPy、Numba 以及（日后的）
+Rust 路径之间做同口径的墙钟时间与正确性对比。不需要 Rust 工具链。
+
+**阶段 1 —— 搭起 Rust crate 骨架（下一个分支）。**
+- `rust/statspai_hdfe/Cargo.toml` —— 带 `pyo3` 与 `rayon` 的 crate 骨架。
+- `rust/statspai_hdfe/src/lib.rs` —— 面向 Python 的模块，只暴露一个函数：
+  `group_demean(codes: PyReadonlyArray1<i64>, y: PyReadwriteArray1<f64>,
+  sums: PyReadwriteArray1<f64>, counts: PyReadonlyArray1<i64>)`。
+- `pyproject.toml` 在 `[build-system].requires` 中加入 `maturin`。
+- 编译好的扩展缺失时回退到 numba（在 `statspai.panel.hdfe` 内部捕获
+  `ImportError`）。
+
+**阶段 2 —— 接入 HDFE 吸收器。**
+- 用 Rust 调用替换单个固定效应的内层循环。
+- 外层交替投影循环仍留在 Python 中，这样就不必移植 Irons-Tuck 加速或
+  单值组剪枝逻辑。
+
+**阶段 3 —— 用 Rayon 跨回归变量并行。**
+- `demean_block(codes, YX: &mut ndarray::Array2<f64>, sums, counts)`，通过
+  `rayon::join` 或跨列的并行迭代器实现。
+- 基准预期：在 ≥4 核的机器上，在阶段 2 之上再快 2–3 倍。
+
+**阶段 4 —— CI、wheel、文档。**
+- `cibuildwheel` 矩阵（见下表）。
+- 在每个矩阵行上执行 `pipx run maturin build --release`。
+- 把 sdist + wheel 上传到 PyPI。
+
+**阶段 5 —— 吸收其余热点路径。**
+- 多向聚类的 Cameron-Gelbach-Miller 求和（v0.9.4 的 NumPy 路径已发布）；
+  用手工 SIMD 写 Rust 版本。
+- 野聚类 bootstrap 的内层循环。
+
+## 4. Wheel 构建矩阵
+
+| Python | 操作系统 | 架构 | 构建器 | 状态 |
+|---|---|---|---|---|
+| 3.9-3.13 | macOS 12+ | arm64 | cibuildwheel + maturin | ⏳ 阶段 4 |
+| 3.9-3.13 | macOS 12+ | x86_64 | cibuildwheel + maturin | ⏳ 阶段 4 |
+| 3.9-3.13 | manylinux_2_17 | x86_64 | cibuildwheel + maturin | ⏳ 阶段 4 |
+| 3.9-3.13 | manylinux_2_17 | aarch64 | cibuildwheel + maturin | ⏳ 阶段 4 |
+| 3.9-3.13 | Windows | x86_64 | cibuildwheel + maturin | ⏳ 阶段 4 |
+| 3.9-3.13 | musllinux_1_2 | x86_64 | cibuildwheel + maturin | ⏳ 阶段 4 |
+
+若某一行失败，我们就为该行发布纯 Python 的 sdist，用户会自动拿到 numba
+路径。**这种优雅降级是本次推进中最重要的一条 API 保证。**
+
+## 5. FFI 接口 —— 提案
+
+```rust
+// rust/statspai_hdfe/src/lib.rs （草图）
+use pyo3::prelude::*;
+use numpy::{PyReadonlyArray1, PyReadwriteArray1};
+use rayon::prelude::*;
+
+#[pyfunction]
+fn group_demean(
+    py: Python<'_>,
+    codes: PyReadonlyArray1<'_, i64>,
+    y: PyReadwriteArray1<'_, f64>,
+    sums: PyReadwriteArray1<'_, f64>,
+    counts: PyReadonlyArray1<'_, i64>,
+) -> PyResult<()> {
+    // 1) 把 sums[g] += y[i] 累加到线程局部桶中，再做归约。
+    // 2) 除以 counts[g] -> 组均值。
+    // 3) 从 y[i] 中减去 sums[codes[i]]。
+    // ...
+    Ok(())
+}
+
+#[pymodule]
+fn statspai_hdfe(m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(group_demean, m)?)?;
+    Ok(())
+}
+```
+
+Python 侧：
+
+```python
+# src/statspai/panel/hdfe_rust.py
+try:
+    from statspai_hdfe import group_demean as _rust_group_demean
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
+
+def group_demean(codes, y, sums, counts):
+    if HAS_RUST:
+        _rust_group_demean(codes, y, sums, counts)
+    else:
+        _numba_group_demean(codes, y, sums, counts)
+```
+
+## 6. 性能契约
+
+本规范中的每一项性能声明都由 `statspai.fast.bench.hdfe_bench(...)` 背书。
+在 Rust 代码落地之前，契约是：
+
+1. Numba 基线必须在所有基准上比纯 NumPy 快 ≥ 2 倍。
+2. Rust 落地后，在 100 万行 × 3 固定效应的 DGP 上必须比 Numba 快 ≥ 3 倍。
+3. 任何路径都不允许在 β̂ 上相对参照 Python 实现产生 > 1e-8 的绝对漂移。
+
+若在发布时第 (2) 条被打破，我们就推迟发布，并在提交信息中公布该基准回归。
+
+## 7. v0.9.5 中**会**发布的内容
+
+- 本规范（你正在读的这个文件）。
+- `src/statspai/fast/bench.py` —— 纯 Python 的基准框架。
+- `src/statspai/fast/__init__.py` —— 把框架接入包中，让用户 / CI 能调用
+  `sp.fast.hdfe_bench(...)`。
+- `tests/test_fast_bench.py` 中的四个测试，覆盖：
+  1. `hdfe_bench(...).results` 的形状为 `(n_paths × n_sizes)`。
+  2. numba 路径的 β̂ 与 numpy 路径的 β̂ 在 1e-8 内一致。
+  3. 框架会跳过未安装的路径（例如缺少 numba），而不是崩溃。
+  4. 「dry run」模式（`n=100`）在 1 秒内完成，以便纳入 CI。
+
+## 8. v0.9.5 中**不会**发布的内容
+
+- Rust crate 本身。
+- `pyproject.toml` 中的 `maturin`。
+- 任何 `cibuildwheel` 配置。
+- 任何可能让使用默认工具链的用户 `pip install statspai` 失败的构建系统变更。
+
+## 9. 风险
+
+- **静默的 ABI 漂移。** Rust-Python 的 ABI 在 PyO3 各版本间并不稳定；要
+  锁定 PyO3 版本，并有意识地进行升级。
+- **Wheel 矩阵老化。** 当 Python 3.14 发布时，manylinux 标签会迁移；
+  我们必须重新测试。
+- **numpy 2.x 与 ndarray 的互操作。** 必须在 `numpy` crate 上使用
+  `numpy ^2.0` 特性开关（阶段 1 的决策）。
+- **并行固定效应的确定性。** Rayon 的工作窃取使迭代顺序不确定，累加器的
+  顺序必须对此不敏感。我们通过浮点可复现性测试来强制这一点，在 `1M` 行上
+  锚定 `atol=1e-10`。
+
+## 10. 负责人
+
+- **Bryce Wang** —— 方向性评审 + 最后一步的基准测试者。
+- 欢迎外部贡献者：任何能让 `group_demean` 跑通、且 CI 在 macOS +
+  manylinux 上全绿的 PR，都会在做 Python 侧集成之前合并。

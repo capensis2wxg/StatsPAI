@@ -1,0 +1,135 @@
+# StatsPAI v0.9.9 —— 联合第一阶段 MTE + 与政策相关的权重
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.8 通过**插入式**第一阶段发布了贝叶斯 MTE（logit MLE → 固定倾向 → 多项式的 MTE 后验）。那条非目标清单点出了两个具体的下一步：
+
+1.  **完整联合的第一阶段** —— 把第一阶段 logit 系数放到 PyMC 图*内部*建模， 让第一阶段的不确定性传播进 MTE 曲线。
+2.  **与政策相关的 MTE 权重** —— AMTE、PRTE （Carneiro-Heckman-Vytlacil 2011）。当前的 `BayesianMTEResult` 把 `ate / att / atu` 暴露为在总体 / 处理组 / 未处理组区域上的简单积分； 与政策相关的权重把它推广到 `U_D` 上的任意权重函数。
+
+本次发布一并完成这两项。
+
+## 2. 范围
+
+### v0.9.9 范围内
+
+- **`sp.bayes_mte(..., first_stage='plugin' | 'joint')`** —— 新增 kwarg。 为向后兼容，默认 `'plugin'`。
+- **`BayesianMTEResult.policy_effect(weight_fn, label)`** —— 返回 `E[w(U) * MTE(U)] / E[w(U)]` 的后验摘要。
+- **`sp.bayes.policy_weight_*`** 常用政策的构造器：
+  - `policy_weight_prte(baseline_propensity_shift)` —— 倾向得分被统一平移 `delta` 时的 PRTE。
+  - `policy_weight_subsidy(u_lo, u_hi)` —— 只影响 `U_D ∈ [u_lo, u_hi]` 个体的统一补贴。
+
+### 范围之外（仍在排队）
+
+- 多工具变量的贝叶斯 MTE —— 仍只有一个标量 Z。
+- 对 u 做 GP 的 MTE 曲面 —— 仍是 `poly_u` 阶多项式。
+- Rust 第二阶段 —— 独立分支。
+
+## 3. API
+
+### 3.1 联合第一阶段
+
+``` python
+def bayes_mte(
+    data, y, treat, instrument, covariates=None,
+    *,
+    first_stage: str = 'plugin',            # 'plugin' | 'joint'
+    u_grid: np.ndarray | None = None,
+    poly_u: int = 2,
+    ...
+)
+```
+
+`first_stage='joint'` 切换为：
+
+```         
+pi_0 ~ Normal(0, prior_coef_sigma)
+pi_Z ~ Normal(0, prior_coef_sigma)
+pi_X ~ Normal(0, prior_coef_sigma, shape=k_x)
+p_i = sigmoid(pi_0 + pi_Z * Z_i + pi_X' X_i)
+D_i ~ Bernoulli(p_i)                          # 观测到的
+```
+
+结构方程在 MTE 多项式中使用 `p_i`（一个基于第一阶段参数的 Deterministic）：
+
+```         
+alpha, beta_X ~ Normal 先验
+b_mte ~ Normal 先验  (shape poly_u+1)
+MTE_i = sum_k b_mte[k] * p_i ** k
+mu_Y_i = alpha + beta_X' X_i + D_i * MTE_i
+Y_i ~ Normal(mu_Y_i, sigma_eps)
+```
+
+因为 `p_i` 本身是随机的，`MTE_i` 会自动继承第一阶段的不确定性。**权衡**： 联合采样比插入式版本更慢（在同类 DGP 上约为 2×–4× 的墙钟时间），因为后验 空间维度更高。追求生产级严谨性就用 joint；做原型或大 n 就用 plugin。
+
+### 3.2 政策效应
+
+``` python
+def policy_effect(
+    self,
+    weight_fn: Callable[[np.ndarray], np.ndarray],
+    label: str = 'policy',
+    rope: tuple[float, float] | None = None,
+) -> dict:
+    """在拟合所用的 u_grid 上给出 E[w(U) * MTE(U)] / E[w(U)] 的后验摘要。
+
+    返回字典，键包括：
+        label、estimate（后验均值）、std_error、hdi_low、hdi_high、
+        prob_positive、prob_rope（可选）。
+    """
+```
+
+这是针对用户指定加权核的*与政策相关的处理效应*。与 `ate / att / atu`（它们 是网格 + 总体份额上的预计算积分）不同，`policy_effect` 允许用户在拟合之后 自行构造任意的政策反事实。
+
+### 3.3 辅助构造器
+
+``` python
+sp.bayes.policy_weight_prte(shift: float)
+    -> Callable[[np.ndarray], np.ndarray]
+```
+
+返回一个权重函数，实现「在统一的指数平移 `shift` 下，倾向得分跨过处理 边际的那些个体」。当政策反事实是「把补贴提高 `delta`」时，这个设定是合理的。
+
+``` python
+sp.bayes.policy_weight_subsidy(u_lo: float, u_hi: float)
+    -> Callable[[np.ndarray], np.ndarray]
+```
+
+权重在 `[u_lo, u_hi]` 内为 1、之外为 0 —— 补贴恰好触达目标区间内的依从者。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/mte.py` | 增加 `first_stage='joint'` 分支 |
+| `src/statspai/bayes/_base.py` | 在 `BayesianMTEResult` 上增加 `policy_effect` 方法 |
+| `src/statspai/bayes/policy_weights.py` | 新增 —— 权重构造器 |
+| `src/statspai/bayes/__init__.py` | 导出权重构造器 |
+| `tests/test_bayes_mte.py` | 增加 joint 模式的测试 |
+| `tests/test_bayes_mte_policy.py` | 新增 —— `policy_effect` 与构造器的测试 |
+| `pyproject.toml` | `version = "0.9.9"` |
+| `CHANGELOG.qmd` | 0.9.9 条目 |
+
+## 5. 测试计划
+
+- `test_bayes_mte_joint_vs_plugin_similar_posterior_mean` —— 在设定正确的 DGP 上，joint 与 plug-in 的后验均值应大致一致（HDI 宽度不同，joint 更宽）。
+- `test_bayes_mte_joint_hdi_wider_than_plugin` —— joint 正确传播了第一阶段 不确定性；其 HDI 宽度应 ≥ plug-in 的宽度。
+- `test_policy_effect_ate_matches_native` —— `policy_effect(lambda u: np.ones_like(u))` ≈ `.ate`。
+- `test_policy_effect_subsidy_band_recovers_local_mte`。
+- `test_policy_weight_prte_returns_callable`。
+- `test_policy_weight_subsidy_bounds_enforced`。
+
+## 6. 成功标准
+
+1.  `first_stage='joint'` 返回的 `BayesianMTEResult` 与 `'plugin'` 具有相同的 字段契约。
+2.  在设定正确的 DGP 上，joint 模式的后验均值落在 plug-in 值的 1 个先验 SD 之内。
+3.  `policy_effect(lambda u: np.ones_like(u))` 与 `result.ate` 在 1e-6 内一致。
+4.  全量测试相对 v0.9.8 基线保持全绿。
+
+## 7. 非目标
+
+- 带按工具变量权重的多工具变量 MTE。
+- 非线性 MTE 曲面（对 `u` 做 GP）。
+- 超出网格范围的自动政策界限外推。

@@ -1,0 +1,225 @@
+# SP-01：空间计量经济学全栈 —— 设计规范
+
+**日期**：2026-04-15
+**父文档**：[生态差距分析](2026-04-15-statspai-ecosystem-gap-analysis.qmd)
+**范围**：差距矩阵中的领域 #16 —— 补齐 StatsPAI 当前最大的短板。
+**冲刺**：S1（子阶段 S1.1 / S1.2 / S1.3，见 §7）
+**状态**：设计已通过 —— 可以进入 `writing-plans`。
+
+## 1. 为什么要做这个子项目
+
+现有的 `statspai.spatial` 模块只有三个 ML 估计量（SAR / SEM / SDM，
+稠密矩阵，438 行代码）。R 侧有 `spatialreg + spdep + splm + sphet +
+GWmodel`（约 60 个函数）。Python 侧有 PySAL
+（`libpysal + esda + spreg + mgwr + splot`，约 100 个公开函数）。这是
+StatsPAI 中差距最大的领域，而且现有的稠密实现规模超过 N ≈ 2000 就无法
+扩展。
+
+补齐这一差距后，StatsPAI 将成为第一个「开箱即用」的统一 Python 包：用户
+可以从权重 → ESDA → 回归 → 效应分解 → GWR → 空间面板一路走完，无需直接
+触碰 `libpysal`、`spreg` 或 `mgwr`，同时又能与它们互操作。
+
+## 2. 成功标准
+
+用户只用 `import statspai as sp` 就能完成下列每一件事：
+
+1. 从 `GeoDataFrame` 或坐标数组构造空间权重（queen、rook、KNN、距离带、
+   核、区组），并做行标准化、二值化或方差稳定化变换。
+2. 计算 Moran's I（全局与局部）、Geary's C、Getis-Ord G 以及连接计数，
+   带基于置换的推断和可直接发表的图形。
+3. 用 ML（中小规模 N）或 Kelejian-Prucha GMM（大 N、异方差稳健）估计
+   SAR / SEM / SDM / SLX / SAC 模型，并提供用于模型选择的 LM / 稳健 LM
+   诊断。
+4. 还原直接 / 间接 / 总效应，并给出模拟标准误（LeSage-Pace 2009）。
+5. 拟合地理加权回归（GWR）与多尺度 GWR（MGWR），带宽用交叉验证或
+   AICc 选择。
+6. 拟合空间面板模型（FE × {SAR, SEM, SDM}），提供 Baltagi 式的推断。
+
+与 PySAL / R `spatialreg` 在 Columbus 与 Boston 住房数据集上的数值容差：
+**所有估计参数的相对误差 < 1e-4**。
+
+## 3. 架构
+
+```
+src/statspai/spatial/
+├─ __init__.py            # 扁平 API 再导出（queen_weights, moran, sar, ...）
+├─ weights/
+│   ├─ core.py            # W 类（底层用稀疏 CSR）
+│   ├─ contiguity.py      # queen, rook（需要 geopandas）
+│   ├─ distance.py        # knn, distance_band, kernel
+│   ├─ block.py           # 区组 / 分区权重
+│   └─ transform.py       # 行 / 二值 / 方差稳定化变换
+├─ esda/
+│   ├─ moran.py           # 全局 + 局部
+│   ├─ geary.py
+│   ├─ getis_ord.py       # G 与 G*（全局 + 局部）
+│   ├─ join_counts.py
+│   └─ plots.py           # moran_plot, lisa_cluster_map
+├─ models/
+│   ├─ base.py            # 共享的估计机制
+│   ├─ ml.py              # 通过 ML（集中化对数似然）估计 SAR/SEM/SDM/SLX/SAC
+│   ├─ gmm.py             # Kelejian-Prucha GMM
+│   ├─ diagnostics.py     # LM-err, LM-lag, Robust-LM, Moran 残差
+│   ├─ impacts.py         # LeSage-Pace 直接 / 间接 / 总效应
+│   └─ logdet.py          # 精确特征值 + Barry-Pace / Chebyshev 近似
+├─ gwr/
+│   ├─ gwr.py             # GWR（Fotheringham 等）
+│   ├─ mgwr.py            # 多尺度 GWR（Fotheringham-Yang-Kang 2017）
+│   └─ bandwidth.py       # 黄金分割、CV、AICc 选择
+├─ panel/
+│   ├─ spatial_panel.py   # FE × {SAR, SEM, SDM}
+│   └─ tests.py           # Baltagi LM、CD 检验
+└─ io/
+    └─ geopandas_adapter.py   # 惰性导入适配层
+```
+
+## 4. 公开 API（最终形态）
+
+### 4.1 权重（L1）
+
+```python
+sp.spatial.queen_weights(gdf)
+sp.spatial.rook_weights(gdf)
+sp.spatial.knn_weights(coords, k=5)
+sp.spatial.distance_band(coords, threshold, binary=True)
+sp.spatial.kernel_weights(coords, bandwidth, kernel='gaussian', fixed=True)
+sp.spatial.block_weights(regimes)
+sp.spatial.W(neighbors, weights=None)            # 显式构造器
+# W 的方法：.transform('R'|'B'|'V'|'D')、.sparse、.neighbors、.islands、
+#            .asymmetries、.full()、.to_libpysal()
+```
+
+### 4.2 ESDA（L2）
+
+```python
+sp.spatial.moran(y, W, permutations=999)
+sp.spatial.moran_local(y, W, permutations=999)
+sp.spatial.geary(y, W, permutations=999)
+sp.spatial.getis_ord_g(y, W, permutations=999)
+sp.spatial.getis_ord_local(y, W, permutations=999, star=True)
+sp.spatial.join_counts(y, W, permutations=999)    # y 为二值
+sp.spatial.moran_plot(y, W, ax=None)
+sp.spatial.lisa_cluster_map(y, W, gdf, ax=None)   # 需要 geopandas
+```
+
+返回值统一为 `SpatialStatistic` 结果对象，含 `.I` / `.G` 等统计量、
+`.p_value`、`.z_score`、`.expectation`、`.variance`、`.simulations`、
+`.summary()`。
+
+### 4.3 空间回归（L3）
+
+```python
+# ML 估计量（由现有稠密实现升级为稀疏）
+sp.sar(W, data=df, formula='y ~ x1 + x2')
+sp.sem(W, data=df, formula='y ~ x1 + x2')
+sp.sdm(W, data=df, formula='y ~ x1 + x2')
+sp.slx(W, data=df, formula='y ~ x1 + x2')         # 新增
+sp.sac(W, data=df, formula='y ~ x1 + x2')         # 新增（SAR + SEM）
+
+# GMM 估计量（新增）
+sp.sar_gmm(W, data=df, formula=..., robust='het')
+sp.sem_gmm(W, data=df, formula=..., robust='het')
+sp.sarar_gmm(W, data=df, formula=...)
+
+# 诊断
+sp.spatial.lm_tests(formula, data, W)             # {LM-err, LM-lag, RLM-err, RLM-lag, SARMA}
+sp.spatial.moran_residuals(residuals, W)
+
+# 效应分解（LeSage-Pace 2009）
+sp.spatial.impacts(result, n_sim=1000, parallel=False)
+# -> DataFrame(direct, indirect, total, se_direct, se_indirect, se_total)
+```
+
+### 4.4 GWR / MGWR（L4）
+
+```python
+sp.gwr(coords, y, X, bw='cv', kernel='bisquare', fixed=False)
+sp.mgwr(coords, y, X, bw_init='gwr', max_iter=200)
+sp.spatial.gwr_bandwidth(coords, y, X, criterion='aicc')
+# 结果：.params（n×k 局部系数）、.localR2、.residuals、.summary()、.map(gdf)
+```
+
+### 4.5 空间面板（L5）
+
+```python
+sp.spatial_panel(
+    data, formula, entity, time, W,
+    model='sar',         # 'sar' | 'sem' | 'sdm'
+    effects='fe',        # 'fe' | 're' | 'twoways'
+)
+sp.spatial.panel_lm_tests(data, formula, entity, time, W)   # Baltagi LM
+```
+
+### 4.6 向后兼容
+
+现有的 `sp.sar / sp.sem / sp.sdm` 保持现有签名
+（`(W: ndarray, data, formula, row_normalize=True, alpha=0.05)`）。内部
+实现现在同时接受 `ndarray` 与 `sp.spatial.W` 对象，并自动路由到稀疏
+求解器。现有测试必须继续通过。
+
+## 5. 关键设计决策
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D1 | **稀疏优先。** `W._sparse: scipy.sparse.csr_matrix` 是规范存储形式，仅在确有必要时才转稠密。 | 现有稠密实现的规模上限约为 N ≈ 2000，稀疏后可支持 N ≥ 10⁵。 |
+| D2 | **双路对数行列式。** N < 5000 用精确特征值分解；N ≥ 5000 用 Barry-Pace 蒙特卡洛 / Chebyshev 近似（可通过 `logdet='auto'\|'exact'\|'approx'` 配置）。 | PySAL `spreg` 与 R `spatialreg` 都采用同样的切分。 |
+| D3 | **依赖策略。** `numpy/scipy/pandas` 为硬依赖。`geopandas`、`libpysal`、`shapely`、`joblib` 为**软依赖** —— 惰性导入，仅在相应代码路径被调用时抛出可操作的 `ImportError`。 | 不会让基础安装体积膨胀。 |
+| D4 | **互操作，而非包装。** 核心部分（权重、Moran、ML、GMM）自行实现；通过 `W.to_libpysal()` 与 `W.from_libpysal(w)` 提供桥接。 | 一层薄封装算不上真正的实现 —— 用户明确要求的是「前台能力」。 |
+| D5 | **统一结果对象。** 所有 L3/L4/L5 估计量返回 `EconometricResults`，并附加空间字段（ρ / λ、效应分解、对数似然、`.moran_residuals`）。 | 与 StatsPAI 全局约定一致；可支持 `sp.outreg2([sar_result, sem_result])`。 |
+| D6 | **LeSage-Pace 效应分解作为默认。** 对 SAR / SDM / SAC 模型，`result.summary()` 始终展示效应分解，而不只是 ρ。 | 只报 ρ 而不报效应分解是已知的误导做法；当前 StatsPAI 实现不报效应。 |
+| D7 | **交叉验证数值。** 每个估计量的测试套件都断言与 PySAL 参照实现在 Columbus 数据集上的相对误差 < 1e-4。 | 金标准验证，与 DID / RD 的测试方式一致。 |
+| D8 | **权重构造用纯 Python + numpy。** S1.1 内不引入编译扩展。 | 保持安装简单；若性能分析有需要，后续再加 Cython/Numba。 |
+
+## 6. YAGNI（明确不做）
+
+- 空间点过程模型（L 与 K 函数，属于 `pointpats` 的领地）。
+- 贝叶斯空间模型（CAR、ICAR、SPDE）—— 后续通过 PyMC 另立子规范。
+- 时空克里金与地质统计 —— 超出计量经济学范围。
+- 基于网络的空间模型 —— 与 SP-05（因果发现）重叠。
+- 实时流式 / GPU 加速求解器。
+
+## 7. 分阶段交付
+
+| 阶段 | 范围 | 预计工期 | 退出条件 |
+|---|---|---|---|
+| **S1.1** | L1 权重 + L2 ESDA + L3 ML 稀疏化重构 + L3 GMM + 效应分解 + LM 检验 | 3–4 周 | Columbus 交叉验证通过；现有测试全绿 |
+| **S1.2** | L4 GWR + MGWR + 带宽选择 | 2–3 周 | Georgia GWR 数据集与 `mgwr` 交叉验证 < 1e-4 |
+| **S1.3** | L5 空间面板 + Baltagi 诊断 | 2 周 | 在 Produc 数据集上与 `splm::spml` 交叉验证 |
+
+每个阶段都可以独立合并进 `main`。
+
+## 8. 测试策略
+
+1. **数值交叉验证**：与 PySAL（Columbus、Boston、Baltimore、NCOVR、
+   Georgia）以及 R `spatialreg` 对比（参照输出保存在
+   `tests/fixtures/spatial/`）。容差：相对误差 1e-4。
+2. **单元测试**：每个公开函数不少于 3 个（正常路径、边界情形、报错）。
+3. **属性测试**：`W.transform('R')` 对已行标准化的 `W` 幂等；在 iid
+   数据上 Moran's I 在 0.05 水平下不显著的次数 > 94%。
+4. **回归测试**：现有 `sp.sar/sem/sdm` 的输出在 1e-8 内保持不变
+   （纯重构不应改变数值）。
+5. **文档测试**：每个 docstring 示例都在 CI 中运行。
+
+## 9. 风险与缓解
+
+| 风险 | 缓解措施 |
+|---|---|
+| N ≈ 5000 边界处稀疏特征值求解不稳定 | 自动启发式选择路径；条件数偏高时告警并建议显式指定 `logdet=`。 |
+| Windows 上 `geopandas` 安装困难 | 邻接权重同时接受 `gdf` 或预先算好的邻接表；文档覆盖两条路径。 |
+| 大 N 下 LeSage-Pace 效应模拟较慢 | 默认 `n_sim=1000`，文档说明 `parallel=True`；提供不带标准误的闭式均值效应作为回退。 |
+| 大 N 下 GWR 内存占用（n×n 带宽评估） | 提供分块实现；N > 50_000 时告警。 |
+| MGWR 收敛调参难以对齐 `mgwr` 包 | 逐字沿用 `mgwr` 的反向拟合循环；在 Georgia 数据集上交叉验证。 |
+
+## 10. 本规范之外（未来规范的锚点）
+
+- 性能剖析与可能的 Numba/Cython 内层循环 → 性能子规范。
+- 贝叶斯空间模型（CAR / ICAR）→ 未来的 SP-Bayes。
+- 空间因果推断（空间 DID、溢出识别）→ 与领域 #21（实验设计）及现有
+  `interference` 模块重叠；推迟。
+
+## 11. 通过之后的流程
+
+1. 由 `writing-plans` 技能为 **S1.1** 生成步骤级实施计划（按阶段设闸 ——
+   S1.2 / S1.3 在其阶段开始时各自生成计划）。
+2. 由 `executing-plans` 推进构建，并在 L1、L2、L3 结束时设置用户评审点。
+3. 每个评审点结束时直接推送到 `main`。

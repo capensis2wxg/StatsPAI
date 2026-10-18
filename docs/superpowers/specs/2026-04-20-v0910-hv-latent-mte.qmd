@@ -1,0 +1,103 @@
+# StatsPAI v0.9.10 —— 隐变量 HV-MTE（经由潜变量 U_D 实现真正的 Heckman-Vytlacil）
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.9 发布了 `sp.bayes_mte(..., first_stage='plugin' | 'joint')`，并明确把
+拟合出的曲线标注为**倾向得分处的处理效应**
+`g(p) = E[Y|D=1,P=p] - E[Y|D=0,P=p]`，而不是教科书意义上的 MTE
+`tau(u) = E[Y_1 - Y_0 | U_D = u]`。在 Heckman-Vytlacil（2005）的线性可分
+结果方程 + 二元正态误差假设下，`g(p) = tau(p)`；在任意异质性下两者会分道
+扬镳。
+
+v0.9.9 采用诚实的标注是正确的。v0.9.10 通过加入**真正的 HV 潜变量模型**
+来还清这笔技术债：为每个个体采样 `U_D_i ~ Uniform(0,1)`，以观测到的
+`D_i` 与后验倾向得分 `p_i` 为条件，然后在每个个体的潜变量 `U_D_i` 处计算
+MTE 多项式。
+
+## 2. 范围
+
+### v0.9.10 范围内
+
+- **`sp.bayes_mte(..., mte_method='polynomial' | 'hv_latent')`** —— 新增
+  kwarg，与已有的 `first_stage` 正交。
+  - `'polynomial'`（默认）：v0.9.9 的行为 —— 对 `p_i` 的多项式，即 `g(p)`。
+  - `'hv_latent'`：对 `U_D_i` 的多项式，其中 `U_D_i` 按 HV 修正的截断均匀
+    分布逐个体采样。
+- **实现方式** —— 使用重参数化技巧，使 NUTS 依然适用：
+  ```
+  raw_U_i ~ Uniform(0, 1)   (shape=n)
+  U_D_i = raw_U_i * p_i                 若 D_i = 1   （U_D < p 当且仅当 D=1）
+        = p_i + raw_U_i * (1 - p_i)     若 D_i = 0
+  tau(u) = b_0 + b_1 u + ... + b_{poly_u} u^{poly_u}
+  Y_i = alpha + beta_X' X_i + D_i * tau(U_D_i) + eps_i
+  ```
+  这样既避开了 `pm.Truncated`，又让 NUTS 保持良好性质。
+- **方法标签** —— `hv_latent` 返回的方法标签为
+  `"Bayesian HV-latent MTE (poly_u=..., ... first stage)"`；`polynomial`
+  沿用 v0.9.9 的标签 `"Bayesian treatment-effect-at-propensity"`。
+
+### 正交性契约
+
+四种 `(first_stage, mte_method)` 组合都要能运行且有文档：
+
+| first_stage \ mte_method | `polynomial` | `hv_latent` |
+|---|---|---|
+| `plugin` | v0.9.8 —— 固定 p_i，对 p 的多项式 | **新增** —— 固定 p_i，潜变量 U_D_i |
+| `joint`  | v0.9.9 —— 贝叶斯 p_i，对 p 的多项式 | **新增** —— 贝叶斯 p_i，潜变量 U_D_i（最诚实，也最慢） |
+
+### 范围之外（推迟）
+
+- `(U_0, U_1, U_D)` 的完整二元正态误差结构 —— 当前模型是线性可分的，不含
+  对水平的选择。属于 0.9.11+ 的自然扩展。
+- 多工具变量 MTE。
+- 对 `u` 的高斯过程（当前仍是多项式）。
+- Rust 第二阶段。
+
+## 3. API
+
+```python
+def bayes_mte(
+    data, y, treat, instrument, covariates=None,
+    *,
+    first_stage: str = 'plugin',     # 'plugin' | 'joint'
+    mte_method: str = 'polynomial',  # 'polynomial' | 'hv_latent'
+    u_grid=None,
+    poly_u: int = 2,
+    ...
+)
+```
+
+校验：调用时若 `mte_method` 不在白名单内，抛出清晰报错。
+
+## 4. 测试计划
+
+- `test_bayes_mte_hv_latent_runs` —— API 冒烟测试。
+- `test_bayes_mte_hv_latent_recovers_true_mte_on_hv_dgp` —— 结果方程为
+  `alpha + MTE(U_D_i) * D_i + eps` 的 DGP；`hv_latent` 应当能还原多项式
+  系数，而 `polynomial` 模式不能。
+- `test_bayes_mte_hv_latent_plus_joint_runs` —— 与 `first_stage='joint'`
+  的正交性。
+- `test_bayes_mte_invalid_mte_method_raises`。
+- `test_bayes_mte_method_label_reflects_hv_latent`。
+- `test_bayes_mte_hv_latent_method_info` —— 记录 `mte_method='hv_latent'`。
+- 保留 v0.9.9 所有 `polynomial` 模式的测试，不做改动。
+
+## 5. 成功标准
+
+1. 在结果方程确实为 `alpha + tau(U_D_i) * D_i + eps`（真正的 HV）的 DGP
+   上，n=800 时 `mte_method='hv_latent'` 能在 HDI 内还原真实 MTE 多项式，
+   而 `mte_method='polynomial'` 存在系统性偏差（两者后验均值之差非零）。
+2. 四种 `(first_stage, mte_method)` 组合都能在小规模 DGP 上无错运行。
+3. 全量测试相对 v0.9.9 基线保持全绿（2054 项通过）。
+4. Round B + Round C 代码评审通过，无阻塞项。
+
+## 6. 非目标
+
+- 为潜变量 U_D 调先验（我们使用 `raw_U_i ~ Uniform(0,1)`，在 HV 关于潜变量
+  U_D 均匀分布的假设下，这本身就是正确的无信息先验）。
+- 完整的二元正态 HV 模型（那会引入 `Y_0` 与 `Y_1` 在给定 `U_D` 下的相关
+  误差结构）。
+- 对大 n 发出警告（潜变量 U_D 会给 NUTS 状态增加 `n` 个参数；我们只在文档
+  中说明变慢，不自动截断）。

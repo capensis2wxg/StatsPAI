@@ -1,0 +1,156 @@
+# StatsPAI 路线图
+
+记录**有意推迟**的功能，避免未来的贡献者（以及未来的 Claude 会话） 重复发现同样的缺口。每条记录都包含：
+
+- 目前缺少什么。
+- **推迟原因** —— 为什么它没能在本来可以发布的版本里落地。
+- **触发条件** —— 把它重新拉回当前冲刺的具体信号。
+- **粗略设计** —— 足以让人直接开工的要点。
+
+某项功能发布后，把该条目移到 `CHANGELOG.qmd` 对应的版本中，并从这里删除。
+
+------------------------------------------------------------------------
+
+## 1 · 近端因果推断 — 非线性桥接
+
+**已于 0.9.6 发布**：`sp.proximal(..., bridge='linear')` —— 采用 Cui 等 （2024）的方法，在结果-混杂桥接函数上做线性 2SLS。
+
+**已推迟**：核方法（Mastouri 等，2021，*Proximal Causal Learning with Kernels*）与筛法 / RKHS（Deaner，2018）桥接估计量。目前 `bridge='kernel'` 和 `bridge='sieve'` 会抛出 `NotImplementedError`。
+
+**推迟原因**：每个估计量本身都是约 500 行的实现（PMMR 核均值匹配、 λ 调优、核函数的设计选择），并且需要配套的调参流程。与其两个都做得 潦草，不如先认真做好一个。
+
+**触发条件**：有用户提出非线性桥接的需求，或有基准测试表明线性桥接 在真实 DGP 上已成为偏差瓶颈。
+
+**粗略设计**：
+
+- `proximal/kernel_bridge.py` —— 实现 Mastouri 的 PMMR，使用高斯核、 中位数启发式带宽、并通过对矩不平衡度做交叉验证选择 λ。
+- `proximal/sieve_bridge.py` —— 多项式 / B 样条筛，带 ℓ₂ 惩罚； 正则化强度由交叉验证决定。
+- 复用 `_linear_iv_fit` 的 bootstrap 方差路径；非线性桥接一般没有 闭式三明治方差。
+
+------------------------------------------------------------------------
+
+## 2 · PLIV / IIVM — 原生多工具变量支持
+
+**当前状态（0.9.7）**：StatsPAI 的 PLIV 与 IIVM 在交叉拟合时把简化型 冗余参数 `r(X) = E[Z|X]` 当作**标量**学习器输出。传入多个工具变量会 抛出清晰的报错，并引导用户使用 `sp.scalar_iv_projection()`，它由 OLS 第一阶段构造一个标量指数。
+
+**已推迟**：向量取值的 `r(X)` 及与之配套的、跨工具变量汇总的 Neyman 正交得分，以及用于弱工具变量诊断的 Cragg-Donald / Kleibergen-Paap 最小特征值第一阶段统计量。
+
+**推迟原因**：向量 Z 的正交得分并不是简单的推广 —— 不同的得分构造会 带来不同的效率，而且当 `k_z > 1` 时，弱工具变量统计量比点估计更关键。 发布一个玩具实现只会误导用户。
+
+**触发条件**：有真实数据集需要多工具变量的 PLIV / IIVM，或有基准测试 表明在同一 DGP 上，标量投影的逃生口明显劣于正规的合并 2SLS。
+
+**粗略设计**：
+
+- 扩展 `dml/_base.py`，在 PLIV / IIVM 中覆盖 `_REQUIRES_SCALAR_INSTRUMENT = False`（脚手架已存在）。
+- 实现一个 PLIV 变体，其交叉拟合学习器返回 `n × k_z` 矩阵， 得分变为堆叠矩条件。
+- 在 `model_info` 中增加 `first_stage_min_eig`（Cragg-Donald）。
+
+------------------------------------------------------------------------
+
+## 3 · MSM 逐期截断 — 升级为自定义分位数
+
+**已于 0.9.7 发布**：`sp.msm(..., trim_per_period=False)` 与辅助函数 `sp.stabilized_weights(..., trim_per_period=0.0)` 允许用户在 Robins （1998）的累积后截断与 Cole & Hernán（2008 §3）的逐期截断之间切换。 启用后，逐期截断的分位数沿用 `trim` 的取值。
+
+**已推迟**：允许逐期截断使用*不同于*累积后截断的分位数（例如逐期截断 更重、累积后截断更轻），并支持非对称截断。
+
+**推迟原因**：单一分位数默认值已覆盖常见约定。支持两个分位数会让 API 表面成倍扩大，换来的只是很少用到的易用性提升。
+
+**触发条件**：有用户反馈希望逐期按 0.05 截断，同时把累积后截断保持 在 0.01。
+
+**粗略设计**：
+
+- 在某个版本中把 `trim_per_period: bool` 改为 `trim_per_period: float`。
+- 弃用期内保留 `trim_per_period=True` 作为 `trim_per_period=trim` 的别名。
+
+------------------------------------------------------------------------
+
+## 4 · 连续处理变量下的前门准则
+
+**当前状态（0.9.7）**：`sp.front_door` 要求 D 为二值。当 D 连续时， 报错信息会引导用户使用 `sp.g_computation(..., estimand='dose_response')`，后者在标准无混淆 假设下处理连续 D 的情形。
+
+**已推迟**：一个正规的前门剂量-反应估计量，即连续 D 的前门公式::
+
+```         
+E[Y | do(D=d)] = Σ_m P(M=m|D=d) · Σ_{d'} P(D=d') · E[Y|D=d', M=m]
+```
+
+在 d 的网格上做边际化。
+
+**推迟原因**：实践中前门准则几乎总是在二值处理下使用（项目参与、 政策采纳）。连续版本需要 `P(M|D)` 的条件密度估计，它是我们为 「二值 D + 连续 M」所发布的高斯线性模型的推广。在出现真实用户案例 之前，逃生口（若无混淆性成立则用 `g_computation`）已经是够用的 过渡方案。
+
+**触发条件**：有使用连续 D 前门准则的应用论文或用户需求。
+
+**粗略设计**：
+
+- 接受 `sp.front_door(..., treat_values=[d_1, ..., d_K])`。
+- 对每个 d_k，计算连续 D 前门公式的闭式解 / 蒙特卡洛积分。
+- 在 `result.detail` 中返回一条曲线（类似 `g_computation` 的 剂量-反应曲线）。
+
+------------------------------------------------------------------------
+
+## 5 · `sp.mediate()` — 统一中介分析家族的 p 值约定
+
+**当前状态（0.9.7）**：`sp.mediate_interventional()` 提供 `pvalue_method='bootstrap_sign' | 'wald'` 参数（默认为 `'bootstrap_sign'`，以与 `sp.mediate()` 保持一致）。经典 `sp.mediate()` 只支持基于符号的约定。
+
+**已推迟**：为 `sp.mediate()` 增加同样的 `pvalue_method` 参数， 并考虑把整个家族的默认值翻转为 `'wald'`（StatsPAI 其他所有因果推断 模块使用的约定）。
+
+**推迟原因**：修改默认值会改变现有用户的汇总输出。协调式的推进应当是： （a）先以增加参数、保持旧默认值的方式加入；（b）在某个版本中弃用旧 默认值；（c）再在次版本号升级时翻转默认值，并在 CHANGELOG 中写明。
+
+**触发条件**：有用户抱怨这种不一致，或者在任何升到 1.0 的版本之前 （约定统一属于 1.0 的议题）。
+
+**粗略设计**：
+
+- 在 `sp.mediate()` 上对称地增加 `pvalue_method` 参数 （`_boot_pvalue` 逻辑复用同一分支）。
+- 在一个版本内，当省略 `pvalue_method` 时发出弃用警告。
+- 在下一个版本中翻转默认值。
+
+------------------------------------------------------------------------
+
+## 6 · `sp.compare_estimators` — 支持提示参数的 Sprint-B 估计器
+
+**已于 0.9.x 发布**：`sp.compare_estimators` 的 `methods=` 接受 `{'ols', 'matching', 'ipw', 'aipw', 'dml', 'g_computation', 'causal_forest', 'did', 'panel_fe'}`。每个分支共用同一套 `(data, y, treatment, covariates, id, time, instrument)` 签名。
+
+**已推迟**：四个 Sprint-B 估计器需要共用签名未暴露的额外参数 —— `'proximal'`（需要 `proxy_z` + `proxy_w`）、`'msm'`（需要 `time_varying`）、`'principal_strat'`（需要一个处理后的 `strata` 列），以及中介分析家族（需要 `mediator`，可选 `tv_confounders`）。 调用它们必须逐个方法传定制参数。
+
+**推迟原因**：给共用签名塞进十几个可选 kwargs 会让常用方法的易用性 倒退；而提示转发映射（`method_hints={'proximal': {'proxy_z': [...], 'proxy_w': [...]}}`）需要设计工作，以免多方法语义变得混乱。
+
+**触发条件**：有用户需要在同一数据集上比较 proximal 与 DML / TMLE。
+
+**粗略设计**：
+
+- 增加 `method_hints: Dict[str, Dict[str, Any]]` 参数，把方法名 映射到该方法的专属 kwargs。
+- 把每个 Sprint-B 分支分派到对应估计器，同时传入共用参数与专属提示。
+- 保持向后兼容：不传 `method_hints` 的调用方行为不变。
+- **冲突规则**：专属提示优先于它所命名方法的共用 kwargs。若顶层共用 参数为 `covariates=['age']`，同时传入 `method_hints={'proximal': {'covariates': ['age', 'educ']}}`， 则 proximal 使用 `['age', 'educ']`，其他所有方法仍使用 `['age']`。冲突时发出 `UserWarning`，让覆盖行为在日志中可见。
+
+------------------------------------------------------------------------
+
+## 7 · Rust HDFE 内核 — PyO3 + Rayon 分组去均值
+
+**当前状态**：高维固定效应去均值目前是纯 NumPy 实现，并有一条 Numba JIT 快速路径（`statspai.fast`）。`rust/statspai_hdfe/` 是一个 PyO3 + Rayon 的替代实现，在 `feat/rust-hdfe` 分支上开发；`main` 保持不含 Rust，以保证 `pip install statspai` 永远不需要 Rust 工具链。
+
+**已推迟**：把这个 crate 合入 `main` 并发布 wheel。
+
+**推迟原因**：只有在完整的 cibuildwheel 矩阵跑绿之后（macOS arm64 + x86_64、manylinux_2_17 x86_64 + aarch64、musllinux_1_2 x86_64、Windows x86_64），才可以让用户依赖这个扩展。在此之前，Numba 路径是可移植的 默认选择。
+
+**触发条件**：上述 cibuildwheel 矩阵在 CI 中全绿。
+
+**契约** —— 该分支构建出的东西必须：
+
+- 通过 `statspai.fast.hdfe_bench` 在 `atol=1e-10` 下的正确性关卡。
+- 在编译好的扩展缺失时优雅跳过 —— 没有 Rust wheel 的平台上的用户 仍可通过 Numba 回退正常工作。
+- 在上述 wheel 矩阵跑绿之前，绝不进入 `main`。
+
+**粗略设计 / 构建**（在仓库根目录执行，且只在该分支上）：
+
+``` bash
+pip install maturin
+maturin develop --release --manifest-path rust/statspai_hdfe/Cargo.toml
+```
+
+内部设计文档（不属于渲染后的站点）：
+
+- `docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd` —— 分阶段推进计划。
+- `docs/superpowers/specs/2026-04-20-v096-bayes-iv-fuzzyrd-perlearner.qmd` —— 催生该分支的 v0.9.6 范围。
+
+------------------------------------------------------------------------

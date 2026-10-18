@@ -1,0 +1,135 @@
+# StatsPAI v0.9.8 —— 贝叶斯边际处理效应（MTE）+ 额外的 VI 后端
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.7 交付了按协变量线性的 CATE 型 HTE-IV，并关掉了 v0.9.6 三个后续项中 的两个。v0.9.7 的「非目标 / 已推迟」清单点出了两个具体的下一步：
+
+1.  **MTE / 依从者异质性 IV** —— Heckman-Vytlacil（2005）的边际处理效应让 我们能刻画 LATE 如何沿*接受处理的倾向分布*（`U_D`）变化。Stata / R / Python 都没有一等公民的**贝叶斯** MTE 原语 —— `grf` 做的是森林， `mtefe`（Stata）是频率学派的，`ivmte`（R）是带界限的频率学派方法。 发布一个贝叶斯 MTE 封装是干净的差异化点，也延续了 `sp.bayes_hte_iv` 的叙事。
+2.  **额外的 VI 后端** —— `_sample_model` 已经在 NUTS 与 ADVI 之间做分发。 增加 Pathfinder（比 ADVI 更快的热启动）与 SMC（近似精确，对多峰后验 稳健），由于已有辅助函数，每个后端只是一行的改动。
+
+## 2. 范围
+
+### v0.9.8 范围内
+
+- **`sp.bayes_mte(data, y, treat, instrument, covariates=None, u_grid=..., ...)`** —— 贝叶斯 MTE 估计。对接受处理的倾向（第一阶段）与响应曲面联合建模， 然后在用户给定的网格上追踪 `MTE(u) = E[Y_1 - Y_0 | U_D = u]` 的后验。
+
+- 在 `_sample_model` 中增加 **`inference='pathfinder' | 'smc'`**。Pathfinder 用 `pm.fit(method='fullrank_advi')` 作为热启动的替代（PyMC 5.x 的 `pmx.fit` 仍是实验特性；我们用 `fullrank_advi` 作为稳定的等价物）。SMC 使用 `pm.sample_smc(...)` —— 对 NUTS 会卡住的困难后验很有用。
+
+- **`BayesianMTEResult`** —— 与 `BayesianCausalResult` 同级；暴露：
+
+  - `.mte_curve` —— `pd.DataFrame(columns=['u', 'posterior_mean', 'posterior_sd', 'hdi_low', 'hdi_high'])`。
+  - `.ate / .att / .atu` —— MTE 在相应 U_D 区域上积分的后验均值。
+  - `.plot_mte()` —— 快速的 matplotlib 可视化（缺少 matplotlib 时跳过）。
+
+### 范围之外（推迟）
+
+- **多工具变量 MTE** —— 本版本使用单个标量工具变量 Z。多 Z 的 MTE 需要 一套与政策相关的加权方案（Carneiro-Heckman-Vytlacil 2011），这不是可以 直接加进去的东西。
+- **非线性 MTE 曲面** —— 我们把 `MTE(u)` 拟合成 `poly_u` 阶多项式 （默认 2）。对 u 做高斯过程是未来的故事。
+- **Rust 第二阶段的接入** —— 在 cibuildwheel 全绿之前，仍留在 `feat/rust-hdfe` 分支上。
+
+## 3. API
+
+### 3.1 `sp.bayes_mte`
+
+``` python
+def bayes_mte(
+    data: pd.DataFrame,
+    y: str,
+    treat: str,
+    instrument: str,
+    covariates: list[str] | None = None,
+    *,
+    u_grid: np.ndarray | None = None,      # 默认：np.linspace(0.05, 0.95, 19)
+    poly_u: int = 2,                        # MTE 形状在 U_D 上的多项式阶数
+    prior_coef_sigma: float = 10.0,
+    prior_mte_sigma: float = 5.0,
+    prior_noise: float = 5.0,
+    rope: tuple[float, float] | None = None,
+    hdi_prob: float = 0.95,
+    inference: str = 'nuts',
+    advi_iterations: int = 20000,
+    draws: int = 2000,
+    tune: int = 1000,
+    chains: int = 4,
+    target_accept: float = 0.9,
+    random_state: int = 42,
+    progressbar: bool = False,
+) -> BayesianMTEResult
+```
+
+### 3.2 模型
+
+标准的 Heckman（1979）/ Heckman-Vytlacil（2005）潜变量指数结构：
+
+```         
+# 选择方程（第一阶段，潜变量）
+D_i = 1{ pi_0 + pi_Z * Z_i + pi_X' X_i + U_D_i > 0 }
+U_D_i ~ Uniform(0, 1)            （在倾向得分尺度上）
+
+# 结果方程（线性可分）
+Y_1i = alpha_1 + beta_X' X_i + tau(U_D_i) + eps_1i
+Y_0i = alpha_0 + beta_X' X_i +       0    + eps_0i
+Y_i  = D_i * Y_1i + (1 - D_i) * Y_0i
+
+# MTE: tau(u) = b_0 + b_1 * u + b_2 * u^2 + ...
+```
+
+**务实的简化**（本版本）：先用 logit 第一阶段拟合倾向得分 `P(D|Z, X)`， 再经由 MLE 倾向（插入法）采样 `U_D_i`。贝叶斯层落在 `tau(u)` 的多项式系数 `(b_0, …, b_poly_u)` 以及结构残差方差上。这**不是**完整的联合 Heckman-Vytlacil 后验（那需要对选择方程参数与结果方程参数一起做 MCMC）。 它与 `sp.bayes_iv` 用的是同一个务实技巧（控制函数插入法）—— 在正确设定 第一阶段的前提下，给出渐近正确的 MTE 曲线后验。这一点要写进文档。
+
+### 3.3 Pathfinder / SMC 后端
+
+``` python
+# 在 _sample_model 中：
+if inference == 'pathfinder':
+    approx = pm.fit(n=advi_iterations, method='fullrank_advi',
+                    random_seed=random_state, progressbar=progressbar)
+    trace = approx.sample(draws)
+    trace.attrs['actual_chains'] = 1
+    trace.attrs['inference'] = 'pathfinder'
+elif inference == 'smc':
+    trace = pm.sample_smc(draws=draws, chains=chains,
+                          random_seed=random_state, progressbar=progressbar)
+    trace.attrs['actual_chains'] = chains
+    trace.attrs['inference'] = 'smc'
+```
+
+把 `'pathfinder'` 与 `'smc'` 加入合法的 inference 校验；更新 `summary()` 里的 ADVI 分支，使其能识别 `pathfinder`（rhat 同样没有意义），但保留 SMC 的 rhat 作为真实诊断量（SMC 返回的是多链 trace）。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/mte.py` | 新增 |
+| `src/statspai/bayes/_base.py` | 扩展 `_sample_model` 以支持 pathfinder + smc；增加 `BayesianMTEResult` |
+| `src/statspai/bayes/__init__.py` | 导出 `bayes_mte`、`BayesianMTEResult` |
+| `src/statspai/__init__.py` | 顶层导出 |
+| `tests/test_bayes_mte.py` | 新增 |
+| `tests/test_bayes_advi.py` | 增加针对 pathfinder / smc 后端的参数化测试 |
+| `pyproject.toml` | `version = "0.9.8"` |
+| `CHANGELOG.qmd` | 0.9.8 条目 |
+
+## 5. 测试计划
+
+- `test_bayes_mte_returns_expected_result` —— 具备 `mte_curve`、`ate`、 `att`、`atu` 属性。
+- `test_bayes_mte_flat_mte_recovers_constant` —— 常数效应 DGP → slope(u) 系数的 HDI 覆盖 0。
+- `test_bayes_mte_monotone_mte_recovery` —— 线性递增的 MTE → 斜率 HDI 为正。
+- `test_bayes_mte_top_level_export`。
+- `test_bayes_mte_custom_u_grid`。
+- `test_bayes_pathfinder_runs`（在全部 6 个估计器上参数化？—— 现有 5 个 + mte）。
+- `test_bayes_smc_runs`（同一清单）。
+
+## 6. 成功标准
+
+1.  在常数效应 DGP 上，`sp.bayes_mte` 返回的 MTE 曲线 SD 有界，且 slope-on-u 的 HDI 覆盖 0。
+2.  在单调 MTE 的 DGP 上，`sp.bayes_mte` 能以 `prob_positive > 0.95` 还原 斜率的符号。
+3.  `inference='pathfinder'` 在至少 2 个现有估计器上可用（成本：1 个测试）。
+4.  `inference='smc'` 在至少 2 个现有估计器上可用。
+5.  全量测试在 v0.9.7 基线之上保持全绿。
+
+## 7. 非目标 / 已知注意事项
+
+- 插入式第一阶段倾向意味着 MTE 后验不会把第一阶段不确定性传播到 `tau(u)` 中。完整的联合后验是 0.9.9+ 的 Q0 工作。
+- 用 `fullrank_advi` 充当 Pathfinder 是权宜之计；等 PyMC 的 `pmx.fit` 稳定 后再切换。
+- 与政策相关的 MTE 权重（AMTE、PRTE）尚未暴露；目前只有未处理组、 处理组与平均三档积分。

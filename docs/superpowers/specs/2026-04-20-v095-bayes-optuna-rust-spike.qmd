@@ -1,0 +1,244 @@
+# StatsPAI v0.9.5 —— 贝叶斯因果 + Optuna 调参的 auto_cate + Rust HDFE 验证
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.4 的回顾留下了三项被标记为「尚未完成」的内容：
+
+1.  **贝叶斯因果** —— `sp.bayes_did` / `sp.bayes_rd` 此前只停留在设想层面。 Stata 有 `bayes:` 前缀，R 有 `brms` / `bayesDID` / `RStanARM`。Python 的 因果技术栈里没有统一的贝叶斯 DID/RD 原语；`PyMC-Econometrics` 只是一个 文档项目，不是开箱即用的包。
+2.  **带 Optuna 调参的 auto_cate** —— v0.9.4 发布了学习器竞赛，但冗余模型 依赖 sklearn GBM 的默认超参。`econml` 的流水线通常会用 Optuna/Ray Tune 把冗余模型包起来；我们的 CATE 流水线需要同样的逃生口。
+3.  **Rust HDFE 内核** —— Numba 比纯 NumPy 快 3 倍，但在超过 100 万行的面板 上会输给 fixest 的 OpenMP C++。Rust + Rayon 的移植是长期答案。
+
+本规范围绕第 1、2 项塑造 **v0.9.5**，并把第 3 项转化为一次有时间盒的 *验证（spike）*（只做设计 + 基准框架，不改构建系统），好让下一个版本不必 从冷启动开始。
+
+## 2. 范围
+
+### v0.9.5 范围内
+
+- **`statspai/bayes/` 模块**
+
+  - `sp.bayes_did(data, y, treat, post, unit=None, covariates=None, ...)` —— 通过 PyMC 实现 2×2 与面板 DID，并对个体效应做层次收缩。
+  - `sp.bayes_rd(data, y, running, cutoff, ...)` —— 局部多项式 + 正态先验 的精确 RD。
+  - `BayesianCausalResult` 数据类，包含后验摘要、HDI、R-hat、ESS，以及 `.tidy()` / `.glance()` 的委派实现。
+  - PyMC 是**可选依赖**。若缺失，每个函数在调用时抛出清晰的 `ImportError`， 绝不在 `import statspai` 时抛出。
+
+- **`sp.auto_cate_tuned(...)`（基于 optuna 的调参器）**
+
+  - 包装 `sp.auto_cate` —— 先通过 Optuna 的 `TPESampler`、按留出集上的 R-loss 调优冗余 GBM 的超参数，再用最佳冗余模型跑 `auto_cate`。
+  - Optuna 是可选的；缺失时给出信息充分的 `ImportError`。
+  - 默认 `n_trials=25`、`timeout=None`（用户可覆盖）。
+
+- **顶层导出**：`sp.bayes_did`、`sp.bayes_rd`、`sp.BayesianCausalResult`、 `sp.auto_cate_tuned`。
+
+- **测试**：`bayes_did` 至少 6 个（2×2 + 面板 + 先验 + 收敛失败警告 + PyMC 缺失守卫），`bayes_rd` 至少 4 个（精确 RD 的还原 + 断点方向 + 带宽 + PyMC 缺失守卫），`auto_cate_tuned` 至少 4 个（API + Optuna 缺失 守卫 + 自定义搜索空间 + 在含噪 DGP 上优于原版的冒烟测试）。
+
+### 范围之外 → 推迟到 1.0（但现在发布验证产物）
+
+- **Rust HDFE 移植**。v0.9.5 将发布：
+  - `docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd` —— 2–3 页 的设计，覆盖 maturin 布局、PyO3 FFI 接口、Rayon 任务图、 cibuildwheel 矩阵与分阶段推进计划。
+  - `statspai/fast/bench.py` —— 纯 Python 的基准框架，在相同 DGP 上为现有 的 NumPy、Numba-JIT 以及（未来的）Rust 内核计时。让下一次会话无需 重新插桩就能做出同口径的速度对比。
+  - **v0.9.5 中不含 Rust 代码或 `maturin` 构建步骤。** 给 `pip install` 加上 Rust 构建，需要跨平台 wheel 测试，而我们在本次发布窗口内无法 完成。半吊子的 Rust 依赖会是我们能发布的最糟糕的东西之一 —— 它会在 Windows / Linux-musl 上静默地引发安装失败。
+
+## 3. API 设计
+
+### 3.1 `sp.bayes_did`
+
+``` python
+def bayes_did(
+    data,
+    y: str,
+    treat: str,              # 曾被处理为 1，从未被处理为 0
+    post: str,               # 处理后时期为 1
+    unit: str | None = None, # 若提供，则在个体上加层次随机效应
+    time: str | None = None, # 若提供，则在时间上加层次随机效应
+    covariates: list[str] | None = None,
+    *,
+    prior_ate: tuple[float, float] = (0.0, 10.0),     # Normal(mu, sigma)
+    prior_unit_sigma: float = 5.0,                     # HalfNormal
+    prior_time_sigma: float = 5.0,                     # HalfNormal
+    prior_noise: float = 5.0,                          # sigma_eps 上的 HalfNormal
+    draws: int = 2000,
+    tune: int = 1000,
+    chains: int = 4,
+    target_accept: float = 0.9,
+    random_state: int = 42,
+    progressbar: bool = False,
+) -> BayesianCausalResult
+```
+
+模型（面板情形）：
+
+```         
+y[i,t] = alpha_i + gamma_t + tau * did_{i,t} + x_{i,t}' * beta + eps_{i,t}
+alpha_i ~ Normal(0, sigma_unit)
+gamma_t ~ Normal(0, sigma_time)
+tau ~ Normal(mu_ate, sigma_ate)
+eps ~ Normal(0, sigma_eps)
+sigma_unit, sigma_time, sigma_eps ~ HalfNormal(.)
+beta ~ Normal(0, 10)
+```
+
+返回 `tau` 的后验；暴露 HDI、后验概率 `P(tau > 0)`、R-hat、ESS。若未提供 `unit`/`time`，则使用 2×2 模型（不含随机效应）。
+
+### 3.2 `sp.bayes_rd`
+
+``` python
+def bayes_rd(
+    data,
+    y: str,
+    running: str,
+    cutoff: float = 0.0,
+    bandwidth: float | None = None,  # 若为 None，用经验法则：0.5 * std(running)
+    poly: int = 1,                    # 1 = 局部线性（Stata 默认），2 = 局部二次
+    *,
+    prior_tau: tuple[float, float] = (0.0, 10.0),
+    draws: int = 2000,
+    tune: int = 1000,
+    chains: int = 4,
+    target_accept: float = 0.9,
+    random_state: int = 42,
+    progressbar: bool = False,
+) -> BayesianCausalResult
+```
+
+模型：
+
+```         
+y = a0 + a1 * (x - c) + ... + a_p * (x - c)^p
+  + tau * treated
+  + b1 * treated * (x - c) + ... + b_p * treated * (x - c)^p
+  + eps
+tau ~ Normal(mu_tau, sigma_tau)
+a, b ~ Normal(0, 10)
+eps ~ Normal(0, sigma_eps);  sigma_eps ~ HalfNormal(5)
+```
+
+（精确 RD）只有落在 `[cutoff - bw, cutoff + bw]` 内的观测才进入模型。
+
+### 3.3 `BayesianCausalResult`
+
+数据类（与 `CausalResult` 松散对应的同级类型）：
+
+| 字段 | 类型 | 说明 |
+|------------------------|------------------------|------------------------|
+| `method` | `str` | 例如 `"Bayesian DID (panel)"` |
+| `estimand` | `str` | `'ATT'` / `'LATE'` |
+| `posterior_mean` | `float` | 点摘要 |
+| `posterior_median` | `float` |  |
+| `posterior_sd` | `float` |  |
+| `hdi_lower`, `hdi_upper` | `float` | 95% HDI |
+| `prob_positive` | `float` | `P(tau > 0 \| data)` |
+| `prob_rope` | `float \| None` | 若用户提供 `rope`，则为 `P(\|tau\| < rope)` |
+| `rhat` | `float` | 收敛诊断量；\>1.01 时告警 |
+| `ess` | `float` | 有效样本量 |
+| `n_obs` | `int` |  |
+| `trace` | `az.InferenceData` | 供下游绘图的完整 trace |
+| `.tidy()` | `DataFrame` | 单行：term、estimate、std_error、hdi_low、hdi_high |
+| `.glance()` | `DataFrame` | method、nobs、rhat、ess、chains、draws |
+| `.summary()` | `str` | 可打印的表头 + tidy + glance + 收敛警告 |
+
+### 3.4 `sp.auto_cate_tuned`
+
+``` python
+def auto_cate_tuned(
+    data, y, treat, covariates,
+    learners=('s', 't', 'x', 'r', 'dr'),
+    n_trials: int = 25,
+    timeout: float | None = None,
+    search_space: dict | None = None,   # 用户覆盖
+    n_folds: int = 5,
+    random_state: int = 42,
+    alpha: float = 0.05,
+    verbose: bool = False,
+) -> AutoCATEResult
+```
+
+默认搜索空间（针对冗余 GBM）：
+
+``` python
+{
+    'outcome_n_estimators': [100, 200, 400, 800],
+    'outcome_max_depth': [2, 3, 4, 5, 6],
+    'outcome_learning_rate': [0.01, 0.03, 0.05, 0.1],
+    'outcome_subsample': [0.6, 0.8, 1.0],
+    'propensity_n_estimators': [100, 200, 400],
+    'propensity_max_depth': [2, 3, 4, 5],
+    'propensity_learning_rate': [0.03, 0.05, 0.1],
+}
+```
+
+目标函数：在 `n_folds` 个留出划分上、使用共享随机种子的**共享冗余 R-loss**。 Optuna 的 `TPESampler` 负责最小化它。得到的 `GradientBoostingRegressor` / `GradientBoostingClassifier` 会作为 `outcome_model=` / `propensity_model=` 交给 `auto_cate(...)`，并最终返回 带有 `model_info['tuned_params']` 与 `model_info['n_trials']` 的 `AutoCATEResult`，以保证可复现。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/__init__.py` | 新增 —— 导出 `bayes_did`、`bayes_rd`、`BayesianCausalResult` |
+| `src/statspai/bayes/_base.py` | 新增 —— `BayesianCausalResult` + 共享的 PyMC 导入守卫 + HDI / R-hat 辅助函数 |
+| `src/statspai/bayes/did.py` | 新增 —— `bayes_did` 实现 |
+| `src/statspai/bayes/rd.py` | 新增 —— `bayes_rd` 实现 |
+| `src/statspai/metalearners/auto_cate_tuned.py` | 新增 —— `auto_cate_tuned` 的 Optuna 包装 |
+| `src/statspai/metalearners/__init__.py` | 导出 `auto_cate_tuned` |
+| `src/statspai/fast/__init__.py` | 新增 |
+| `src/statspai/fast/bench.py` | 新增 —— HDFE 内核的基准框架 |
+| `src/statspai/__init__.py` | 顶层导出 |
+| `tests/test_bayes_did.py` | 新增 |
+| `tests/test_bayes_rd.py` | 新增 |
+| `tests/test_auto_cate_tuned.py` | 新增 |
+| `pyproject.toml` | `version = "0.9.5"`，在 `[project.optional-dependencies]` 中加入 `pymc`、`arviz`、`optuna` |
+| `CHANGELOG.qmd` | 0.9.5 条目 |
+| `docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd` | 新增 —— Rust 验证设计文档 |
+
+## 5. 测试计划
+
+### 5.1 `test_bayes_did.py`
+
+1.  `test_bayes_did_imports_cleanly` —— 仅导入模块不得触发 PyMC 的依赖扫描。
+2.  `test_bayes_did_missing_pymc_raises_informative` —— 用 monkeypatch 模拟 PyMC 缺失。
+3.  `test_bayes_did_2x2_recovers_true_att` —— 真实 ATT = 1.5 的 2×2 DID； 95% HDI 覆盖 1.5。
+4.  `test_bayes_did_panel_recovers_true_att_with_unit_fe` —— 个体随机效应， ATT 已知的错层 DGP。
+5.  `test_bayes_did_prob_positive_calibrated` —— 当真实 ATT 明显 \> 0 时， `prob_positive` ≥ 0.99。
+6.  `test_bayes_did_tidy_glance_work` —— `.tidy()` 返回带预期列的单行 DataFrame；`.glance()` 报告 rhat、ess。
+7.  `test_bayes_did_low_draws_raises_convergence_warning` —— 压力测试 rhat 告警路径。
+
+### 5.2 `test_bayes_rd.py`
+
+1.  `test_bayes_rd_imports_cleanly`。
+2.  `test_bayes_rd_missing_pymc_raises_informative`。
+3.  `test_bayes_rd_sharp_recovery` —— 真实 τ = 2 的精确 RD，95% HDI 覆盖 2。
+4.  `test_bayes_rd_no_effect_has_zero_hdi` —— 零效应 DGP，HDI 跨过 0， `prob_positive` ≈ 0.5。
+5.  `test_bayes_rd_bandwidth_respected` —— 带宽更窄 ⇒ 进入模型的观测更少。
+6.  `test_bayes_rd_poly2_still_runs` —— 二次多项式能无错拟合。
+
+### 5.3 `test_auto_cate_tuned.py`
+
+1.  `test_auto_cate_tuned_missing_optuna_raises_informative`。
+2.  `test_auto_cate_tuned_api` —— 返回的 AutoCATEResult 在 model_info 中带 `tuned_params`。
+3.  `test_auto_cate_tuned_small_n_trials_smoke` —— `n_trials=5`，返回可用结果。
+4.  `test_auto_cate_tuned_custom_search_space` —— 用户覆盖生效。
+
+## 6. 成功标准
+
+1.  `pytest tests/test_bayes_did.py tests/test_bayes_rd.py tests/test_auto_cate_tuned.py -q` → 全绿。
+
+2.  `pytest tests/ --ignore=tests/reference_parity` → 相对 v0.9.4 基线无新增失败。
+
+3.  `sp.__version__ == '0.9.5'`。
+
+4.  即使在**没有**安装 PyMC 或 Optuna 的环境中，`import statspai as sp` 也 必须成功 —— 它们是可选 extras，不是核心依赖。
+
+5.  README 风格片段能端到端运行：
+
+    ``` python
+    import statspai as sp
+    r = sp.bayes_did(df, y='y', treat='ever', post='post', unit='id')
+    print(r.summary())
+    ```
+
+## 7. 非目标 / 权衡（明确列出）
+
+- **Rust 代码留在独立分支上。** 0.9.5 只发布设计与基准框架。在没有干净的 CI 方案之前，给 `pip install` 加 Rust 构建步骤是我们能推给用户的最糟糕 的事情之一。
+- **变分推断**（`pymc.fit`）在 0.9.5 中**不**接线。只用 NUTS。VI 严格来说 只是性能优化，可以在 0.9.6 中以开关形式落地。
+- **贝叶斯模糊 RD、diff-in-RD、聚束、IV-Bayes** —— 全部推迟。精确 RD 与 2×2/面板 DID 是两个典范情形；更广泛的贝叶斯因果在 0.9.6+ 发布。
+- **自动调优搜索空间**（例如自动探测 n/p 并挑选好的默认值）推迟 —— 用户 可自行传入 `search_space` 字典来覆盖。

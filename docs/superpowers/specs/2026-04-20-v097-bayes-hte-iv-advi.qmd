@@ -1,0 +1,163 @@
+# StatsPAI v0.9.7 —— 异质性效应贝叶斯 IV + ADVI 开关
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.6 落地了平均 LATE 的贝叶斯 IV、模糊 RD 与按学习器的 Optuna 调参。
+进入本次发布时，推迟清单上是：
+
+1. 贝叶斯 *异质性效应* IV —— 当前的 `bayes_iv` 只报一个 LATE 数字；它无法
+   回答「LATE 在子群体 X 上是否不同？」。
+2. 变分推断（ADVI）开关 —— NUTS 是正确的默认选择，但对于大 N / 原型模式
+   的用户，他们想要 30 秒出后验，而不是 5 分钟。
+3. 贝叶斯聚束 —— 排队待评估。
+
+## 2. 范围
+
+### 范围内
+
+- **`sp.bayes_hte_iv(data, y, treat, instrument, effect_modifiers, ...)`**
+  —— 贝叶斯线性 IV，其中 LATE 对用户提供的效应修饰变量呈线性：
+
+  ```
+  D = pi_0 + pi_Z' Z + pi_X' X + v           （第一阶段）
+  Y = alpha + tau_0 * D + (tau_hte' M) * D + beta_X' X + rho * v_hat + eps
+  ```
+
+  其中 ``M = X_eff - mean(X_eff)`` 是中心化后的效应修饰变量矩阵。
+  ``(tau_0, tau_hte)`` 的后验给出：
+  - 平均 LATE = ``tau_0``
+  - CATE 斜率的后验（每个修饰变量一个）
+  - 在用户给定协变量取值处预测的 CATE（可选）
+
+  返回新的 `BayesianHTEIVResult`，它继承 `BayesianCausalResult`，并增加
+  一个 `.cate_slopes` DataFrame。
+
+- 在所有现有贝叶斯估计器（`bayes_did`、`bayes_rd`、`bayes_iv`、
+  `bayes_fuzzy_rd`）*以及*新的 `bayes_hte_iv` 上增加
+  **`inference='nuts' | 'advi'`** 参数。ADVI 走 `pm.fit(method='advi')`，
+  并从拟合出的近似分布中抽取 `draws` 个样本。文档中标明它是「快速但近似」
+  —— R-hat 对 ADVI 没有意义，因此我们报告 `np.nan`。
+
+### 范围之外（附明确理由）
+
+- **贝叶斯聚束** —— 经评审后认为，Kleven/Saez/Chetty 那套结构化聚束机制
+  本质上是一种宏观 / 公共财政的识别策略，它从税率表的折点/缺口中反推
+  *行为弹性*。要把它变成贝叶斯估计量需要：
+  1. 一套无法跨折点类型泛化的结构化效用 / 最优化参数化；
+  2. 对偏好异质性的先验，它们是领域特定的，很难设默认值；
+  3. 一个可解释性完全受限于底层结构模型的拟合结果，这与「面向 Agent 的
+     一行代码」设计主旨相悖。
+
+  需要该工具的频率学派用户已经有了 `sp.bunching`。**我们明确不发布
+  `sp.bayes_bunching`**；它的单位代码行收益低于贝叶斯路线图上的其他任何
+  一项。若用户提出清晰的使用场景再议。
+
+- 多工具变量的交互效应、边际处理效应（MTE）后验 —— 0.9.8+。
+
+- Rust 第二阶段 —— 独立的分支工作。
+
+## 3. API
+
+### 3.1 `sp.bayes_hte_iv`
+
+```python
+def bayes_hte_iv(
+    data: pd.DataFrame,
+    y: str,
+    treat: str,
+    instrument: str | Sequence[str],
+    effect_modifiers: Sequence[str],    # 至少 1 个可能带来异质性的协变量
+    covariates: list[str] | None = None, # 同时进入两个阶段的控制变量
+    *,
+    prior_late: tuple[float, float] = (0.0, 10.0),
+    prior_hte_sigma: float = 5.0,        # tau 斜率上的 Normal(0, sigma) 先验
+    prior_coef_sigma: float = 10.0,
+    prior_noise: float = 5.0,
+    inference: str = 'nuts',             # 'nuts' | 'advi'
+    advi_iterations: int = 20000,
+    rope: tuple[float, float] | None = None,
+    hdi_prob: float = 0.95,
+    draws: int = 2000,
+    tune: int = 1000,
+    chains: int = 4,
+    target_accept: float = 0.9,
+    random_state: int = 42,
+    progressbar: bool = False,
+) -> BayesianHTEIVResult
+```
+
+### 3.2 `BayesianHTEIVResult`
+
+继承 `BayesianCausalResult`；新增：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `cate_slopes` | `pd.DataFrame` | 每个效应修饰变量一行：`term, estimate (posterior mean), std_error, hdi_low, hdi_high, prob_positive` |
+| `effect_modifiers` | `list[str]` | 修饰变量名称 |
+| `predict_cate(values: dict)` | 方法 | 在特定修饰变量取值处预测 CATE 后验；返回 `{mean, median, sd, hdi_low, hdi_high, prob_positive}` |
+
+### 3.3 `inference='advi'`
+
+适用于每个贝叶斯估计器（v0.9.7 之后共 5 个）：
+
+```python
+if inference == 'advi':
+    approx = pm.fit(n=advi_iterations, method='advi',
+                    random_seed=random_state, progressbar=progressbar)
+    trace = approx.sample(draws)
+    # r-hat 对 ADVI 没有意义；设为 nan
+elif inference == 'nuts':
+    trace = pm.sample(...)
+else:
+    raise ValueError(...)
+```
+
+文档中写明注意事项：ADVI 是**平均场**近似（每个参数都被当作独立高斯），
+因此原本相关的后验会显得比应有的更紧。关心校准性的用户应使用 NUTS。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|---|---|
+| `src/statspai/bayes/hte_iv.py` | 新增 |
+| `src/statspai/bayes/_base.py` | `BayesianHTEIVResult` 子类；供所有估计器共用的 `_sample_model(inference=...)` 辅助函数 |
+| `src/statspai/bayes/did.py` / `rd.py` / `iv.py` / `fuzzy_rd.py` | 增加 `inference` 参数；统一走 `_sample_model` |
+| `src/statspai/bayes/__init__.py` | 导出 `bayes_hte_iv`、`BayesianHTEIVResult` |
+| `src/statspai/__init__.py` | 顶层导出 |
+| `tests/test_bayes_hte_iv.py` | 新增 |
+| `tests/test_bayes_advi.py` | 新增 —— 各估计器上的 ADVI 开关 |
+| `pyproject.toml` | `version = "0.9.7"` |
+| `CHANGELOG.qmd` | 0.9.7 条目 |
+
+## 5. 测试计划
+
+### `test_bayes_hte_iv.py`（不少于 7 个测试）
+
+1. `test_bayes_hte_iv_imports_cleanly`。
+2. `test_bayes_hte_iv_returns_extended_result` —— 具备 `cate_slopes`。
+3. `test_bayes_hte_iv_average_late_recovered_on_hetero_dgp`。
+4. `test_bayes_hte_iv_slopes_recovered_on_hetero_dgp`。
+5. `test_bayes_hte_iv_no_heterogeneity_dgp_slopes_near_zero`。
+6. `test_bayes_hte_iv_predict_cate_returns_dict`。
+7. `test_bayes_hte_iv_missing_modifier_raises`。
+
+### `test_bayes_advi.py`（不少于 5 个测试）
+
+1. `test_bayes_did_advi_runs`。
+2. `test_bayes_rd_advi_runs`。
+3. `test_bayes_iv_advi_runs`。
+4. `test_bayes_fuzzy_rd_advi_runs`。
+5. `test_bayes_invalid_inference_raises`。
+
+## 6. 成功标准
+
+1. 在真实 `tau(X) = 1 + 0.5 * X` 的 DGP 上，`sp.bayes_hte_iv` 能同时还原
+   `tau_0`（HDI 覆盖 1）与 `X` 上的斜率（HDI 覆盖 0.5）。
+2. 在 `tau(X) ≡ 1`（无异质性）的 DGP 上，斜率的 HDI 跨过 0，且
+   `prob_positive ≈ 0.5`。
+3. `inference='advi'` 能在 5 个估计器上各自产出可用的
+   `BayesianCausalResult`；R-hat 报告为 `NaN`；主估计量上的后验均值落在
+   NUTS 后验 SD 的 2 倍范围内。
+4. 全量测试保持全绿（在 v0.9.6 的 1911 项基线之上无回归）。

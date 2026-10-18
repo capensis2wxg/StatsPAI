@@ -1,0 +1,110 @@
+# StatsPAI v0.9.12 —— Probit 尺度 MTE（Heckman 选择框架）
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.11 处理了多 IV MTE 与真正的 CHV-2011 PRTE 权重。贝叶斯 MTE 前沿剩下的 最后一条线索是带高斯 / probit 尺度误差的 **Heckman（1979）选择模型**，它 正是 HV 2005 背后的常规参数化框架：
+
+```         
+V_i ~ N(0, 1)
+D_i = 1{ logit(p_i) + V_i > 0 }   （probit / 正态尾选择）
+MTE(v) = μ_1(X) - μ_0(X) + (ρ_{1V}σ_1 - ρ_{0V}σ_0) · v  （关于 V 线性）
+```
+
+在严格的二元正态 HV 假设下，MTE 在 V 尺度上是线性的。我们现有的 「关于 U_D 的多项式」模型（U_D ∈ \[0,1\]）更灵活，但参数化在均匀尺度上； 想要常规 Heckman 解释的用户需要 V 尺度的形式。
+
+v0.9.12 为 `sp.bayes_mte` 加入第三条正交轴：
+
+| 轴                      | 取值                             |
+|-------------------------|----------------------------------|
+| `first_stage`           | `'plugin'` / `'joint'`           |
+| `mte_method`            | `'polynomial'` / `'hv_latent'`   |
+| **`selection`**（新增） | `'uniform'`（默认） / `'normal'` |
+
+三者共同描述了贝叶斯 MTE 的 8 种组合网格。这 8 种都应当能无错拟合； 不同 DGP 下的还原能力有所差异。
+
+## 2. 范围
+
+### v0.9.12 范围内
+
+- **`sp.bayes_mte(..., selection='uniform' | 'normal')`** —— 新增 kwarg。 `'uniform'`（默认）保持 v0.9.11 行为。 `'normal'` 把多项式横坐标重新解释为 `V_i = Φ^(-1)(U_D_i)`（probit 尺度，V ∈ ℝ）。支持与已有 `first_stage` / `mte_method` 的所有组合。
+- **数学恒等式保证**：`'normal'` 模式在 V 上拟合 MTE 多项式。在 `poly_u=1` + `selection='normal'` + `mte_method='hv_latent'` 下，模型 恰好对应线性的 Heckman-HV MTE。
+- **方法标签**反映选择尺度：`"Bayesian MTE on V scale (...)"` 与 `"Bayesian MTE on U_D scale (...)"`。
+
+### 范围之外（推迟到 0.9.13+）
+
+- **完整的二元正态误差协方差** `(U_0, U_1, V) ~ N(0, Σ)`，含自由相关参数 `ρ_{0V}`、`ρ_{1V}`。这需要在 `(Y, D)` 上做显式混合建模与 MvNormal，而它 在 PyMC 中存在已知的收敛病态。作为独立版本跟踪。
+- 对水平的选择（`μ_0` ≠ `μ_1`）作为自由参数：当前已被吸收进 `alpha + beta_X·X`。要拆开需要完整的混合模型。
+- Rust 第二阶段、MTE 的 VI 后端。
+
+## 3. API
+
+``` python
+def bayes_mte(
+    data, y, treat, instrument, covariates=None,
+    *,
+    first_stage: str = 'plugin',
+    mte_method: str = 'polynomial',
+    selection: str = 'uniform',        # 新增
+    u_grid: np.ndarray | None = None,
+    poly_u: int = 2,
+    ...
+)
+```
+
+### 语义
+
+在 `selection='uniform'`（v0.9.11 默认）下：
+
+```         
+横坐标 a ∈ [0, 1]  （polynomial 模式下为 p_i，hv_latent 下为 U_D_i）
+MTE 曲线：τ(a) = Σ_k b_k · a^k,  a ∈ u_grid ⊂ [0, 1]
+```
+
+在 `selection='normal'` 下：
+
+```         
+横坐标 v ∈ ℝ，其中 v = Φ^{-1}(a)
+MTE 曲线：τ(v) = Σ_k b_k · v^k,  v ∈ Φ^{-1}(u_grid) ⊂ ℝ
+```
+
+返回的 `mte_curve` DataFrame 仍保留一列 `u`（取值在 \[0,1\]）以方便用户 —— 这是自然的倾向得分尺度。当 `selection='normal'` 时额外增加一列 `v`，让用户 能看到 probit 坐标。
+
+ATE / ATT / ATU 的积分：在 V 尺度上，我们对高斯密度 `φ(v) dv` 积分，而不是 对均匀的 `du` 积分。这与二元正态下 HV 的可识别被积函数一致。
+
+### 默认值理由
+
+`'uniform'` 保持默认是因为： 1. 不对 v0.9.11 用户造成破坏性变更。 2. `[0,1]` 倾向得分尺度是多数用户想要的、面向 Agent 的抽象。 3. `'normal'` 是更纯粹的「我在做 Heckman 教科书式分析」模式 —— 真正需要 它的用户自然会去用。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/mte.py` | 增加 `selection` kwarg；为 `'normal'` 时用 `Φ^{-1}` 变换横坐标；`'normal'` 时把 ATE 积分改为高斯测度；更新方法标签与 `model_info`。 |
+| `src/statspai/bayes/_base.py` | 当拟合在 V 尺度上时为 `mte_curve` DataFrame 增加一列 `v`（否则为空）。 |
+| `tests/test_bayes_mte_selection.py` | 新增 —— `selection='normal'` 的还原能力与正交性。 |
+| `pyproject.toml` | `version = "0.9.12"` |
+| `CHANGELOG.qmd` | 0.9.12 条目 |
+
+## 5. 测试计划
+
+- `test_selection_uniform_back_compat` —— 使用默认 `selection` 的标量调用 返回 v0.9.11 的行为。
+- `test_selection_normal_api_surface` —— 新 kwarg 流入 `model_info['selection']`；方法标签提及 V 尺度。
+- `test_selection_normal_recovers_linear_heckman` —— 潜变量 V 为高斯、MTE 关于 V 线性的 DGP；`poly_u=1 + selection='normal' + hv_latent` 能还原斜率。
+- `test_selection_normal_all_orthogonal_combos_run` —— 4 种组合 （plugin/joint × polynomial/hv_latent）× `selection='normal'`。
+- `test_selection_invalid_value_raises`。
+- `test_selection_normal_mte_curve_has_v_column`。
+
+## 6. 成功标准
+
+1.  `selection='normal'` 能在全部 4 种 `(first_stage, mte_method)` 组合上运行。
+2.  在 `MTE(V) = 0.5 + 1.5·V`（潜变量 V 为高斯）的 DGP 上， `poly_u=1 + selection='normal' + hv_latent` 能在 HDI 内还原 `(0.5, 1.5)`。
+3.  全量测试保持全绿（零新增失败规则）。
+4.  两轮代码评审，无阻塞发布的问题。
+
+## 7. 非目标（明确）
+
+- 自由的交叉相关参数 `(ρ_{0V}, ρ_{1V})` —— 二元正态混合模型自成一个版本。
+- V 尺度上的政策权重 —— 现有 `policy_weight_*` 构造器仍工作在 `[0,1]` 网格 上；使用 `selection='normal'` 的用户会通过 `Φ` 变换 `u_grid`，因此政策积分 在倾向得分尺度上仍然良定义。
+- 改变 `V = Φ^{-1}(p)` 的符号 / 方向（我们采用标准约定）。

@@ -1,0 +1,231 @@
+# P1 —— 面向 Agent × 方法学前沿（2026-04-21）
+
+> 目标：推进 StatsPAI 的两条竞争轴 —— **面向 Agent** 与 **方法学前沿** —— 通过闭合 LLM-DAG 回路、发布端到端的 `sp.paper()` 编排器，并开启 `causal_text` 这一前沿方向（MVP）。
+
+## 背景（探测得到的事实）
+
+- P0（`2026-04-21-p0-agent-native-design.qmd`）已经发布：
+  - MCP server（`agent/mcp_server.py`，355 行，完整的 JSON-RPC stdio）
+  - 工具 manifest + `execute_tool`（`agent/tools.py`，576 行）
+  - 补救注册表（`agent/remediation.py`，270 行）
+  - `recommend` / `verify_recommendation` 规则引擎
+  - LLM 单次 DAG 提议（`causal_llm/llm_dag.py`，位于 `llm_dag_propose`）
+    - LLM 评估器（`dag/llm_evaluator.py`）
+  - `sp.causal()` 工作流对象（`workflow/causal_workflow.py`，1075 行， 诊断 → 推荐 → 估计 → 稳健性 → 报告）
+- `causal_discovery/` 中已有 9 种因果发现算法（PC、GES、FCI、NOTEARS、 DyNOTEARS、LiNGAM、ICP、PCMCI、LPCMCI），但没有一个接受*先验知识* （禁止 / 必需的边）作为约束
+- `dag/llm_dag.py` 只做 oracle 与 CI 骨架的*单次*合并 —— 没有迭代，没有 逐边置信度
+- `sp.causal()` 产出 HTML/MD 报告，但**不**产出可直接投稿的 TeX/Word 章节， 也不能从「数据 + 一句自然语言问题」这样的单一用户入口调用
+- 尚不存在 `causal_text` 模块（把文本/嵌入作为处理变量 / 结果 / 混杂因素 / 测量误差校正，这一块完全空白）
+
+## 范围
+
+同一个 P1 伞下的三个子项目，规模按一次发布来定：
+
+| ID | 项目 | 深度 | 理由 |
+|------------------|------------------|-------------------|------------------|
+| **P1-A** | LLM-DAG 闭合回路 | 完整 | 共享基础设施：`sp.paper()` 与 `recommend()` 都要消费 DAG |
+| **P1-C** | `sp.paper(data, question)` 端到端 | 完整 | 面向 Agent 价值的旗舰演示 |
+| **P1-B** | `sp.causal_text` MVP | MVP | 全新领域 —— 打开门、发布 2 种方法、标记为 `experimental` |
+
+范围之外（已推迟）：
+
+- `text-as-confounder`（Roberts-Stewart-Nielsen 的 STM 式）—— 需要主题模型的 依赖方案
+- `text-as-outcome`（Egami 等 2018）—— 需要标注流水线
+- LLM 集成式的 DAG 聚合（多个 LLM 投票）—— 依赖于先有稳定的闭合回路
+
+## 交付物
+
+### D1 —— P1-A：LLM-DAG 闭合回路
+
+**新增模块**：`src/statspai/causal_llm/llm_dag_loop.py`
+
+**新增公开函数**（已注册）：
+
+1.  `sp.llm_dag_constrained(data, variables, descriptions, oracle=None, algo='pc', alpha=0.05, max_iter=3, ci_validate=True, verbose=False) -> LLMConstrainedDAGResult`
+    - **回路**：(a) 调用 `oracle`（或 `llm_dag_propose`）得到候选有向边 + 置信度；(b) 拆分为 `forbidden`（LLM 认为没有边）与 `required` （LLM 认为有边）；(c) 跑 `algo`（尊重 forbidden/required 边作为背景 知识的 PC 变体）；(d) 对每条 LLM 认定的必需边，在数据上跑一次条件 独立性检验 —— 若在 `alpha` 水平被拒绝，则降级为候选；(e) 迭代至收敛 或达到 `max_iter`。
+    - 返回：`final_dag`（statspai DAG）、`edge_confidence` （DataFrame：edge、llm_score、ci_pvalue、retained、source）、 `iteration_log`、`provenance`。
+2.  `sp.llm_dag_validate(dag, data, alpha=0.05, ci_test='fisherz') -> DAGValidationResult`
+    - 独立使用：接受任意 DAG（LLM 生成的或别的来源），对每条存在的边 （仅以父节点为条件）与每条缺失的边（全边际相关）各跑一次 CI 检验， 返回逐边的支持证据。
+
+**带约束的 PC**：扩展 `causal_discovery/pc.py`，增加 `pc_algorithm(..., forbidden=None, required=None)` 参数。约束在定向步骤 之前注入：
+
+- `required` 边在骨架阶段绝不会被移除
+- `forbidden` 边无论 CI 检验结果如何都会被移除
+
+**结果类**：
+
+``` python
+@dataclass
+class LLMConstrainedDAGResult:
+    final_dag: DAG
+    edge_confidence: pd.DataFrame  # edge, llm_score, ci_pvalue, retained, source
+    iteration_log: list[dict]
+    llm_proposal: LLMDAGProposal | None
+    skeleton: pd.DataFrame
+    provenance: dict
+    def summary(self) -> str: ...
+    def to_dict(self) -> dict: ...
+```
+
+**测试**（`tests/test_llm_dag_loop.py`）：
+
+- `test_constrained_pc_respects_forbidden`：X→Y→Z 的合成 DGP，禁止 X→Z， 检查 X→Z 不存在
+- `test_constrained_pc_respects_required`：同一 DGP，强制一条已知为真的边， 检查它保留下来
+- `test_loop_demotes_ci_rejected_edge`：LLM 提议 X→Z 但数据的 CI 检验拒绝 → 最终 DAG 丢弃该边
+- `test_validate_returns_per_edge_support`：给定 DAG → 逐边 p 值与手工偏 相关检验一致
+- `test_loop_converges_in_one_iter_when_llm_correct`：返回真实边的确定性 echo oracle → 回路立即收敛
+- `test_loop_works_without_oracle`：`oracle=None` → 回退到纯 PC （仅用数据）并返回合理结果
+
+**家族指南**：`docs/guides/llm_dag_family.qmd` —— 何时用闭合回路 vs 单次、 如何接一个 oracle（Anthropic / OpenAI / echo）、如何读 `edge_confidence`、 如何与 `recommend_estimator` 组合。
+
+### D2 —— P1-C：`sp.paper(data, question)` 端到端
+
+**新增模块**：`src/statspai/workflow/paper.py`
+
+**新增公开函数**（已注册）：
+
+``` python
+sp.paper(
+    data: pd.DataFrame,
+    question: str,
+    *,
+    y: str | None = None,
+    treatment: str | None = None,
+    covariates: list[str] | None = None,
+    id: str | None = None,
+    time: str | None = None,
+    running_var: str | None = None,
+    instrument: str | None = None,
+    cutoff: float | None = None,
+    cohort: str | None = None,
+    design: str | None = None,
+    dag=None,
+    fmt: str = 'markdown',  # 'markdown' | 'tex' | 'docx'
+    output_path: str | None = None,
+    include_eda: bool = True,
+    include_robustness: bool = True,
+    cite: bool = True,
+) -> PaperDraft
+```
+
+**流水线**（编排器 —— *不*重新实现底层原语）：
+
+1.  解析 `question`（轻量正则 / 启发式：识别 "effect of X on Y"、"DiD"、 "RD around C"、"IV using Z"），在未显式传入时补全缺失的 y/treatment
+2.  跑 `sp.causal()` 工作流 → 得到诊断 + 推荐 + 估计 + 稳健性
+3.  EDA 章节：通过 `sp.sumstats` 给出描述统计（样本量、处理组平衡性、 缺失情况）
+4.  稳健性章节：既有 `workflow.robustness()` 的输出 + 追加 `sp.evalue_from_result`（已在用）+ 设计专属的检验套件 （例如 DiD：`pretrends_test` + `honest_did(M=0,...)`；IV：第一阶段 F + `anderson_rubin_ci`；RD：`rdbalance` + `rdsensitivity`）
+5.  按选定格式渲染：
+    - `markdown`：分节（Question、Data、Identification、Estimator、Results、 Robustness、References）
+    - `tex`：同样内容，对每个结果用 `to_latex` + jinja 风格模板
+    - `docx`：同样内容，在可用时使用 `to_docx`
+
+**结果类**：
+
+``` python
+@dataclass
+class PaperDraft:
+    question: str
+    sections: dict[str, str]  # title -> body
+    workflow: CausalWorkflow
+    fmt: str
+    citations: list[str]
+    def to_markdown(self) -> str: ...
+    def to_tex(self) -> str: ...
+    def to_docx(self, path: str) -> None: ...
+    def write(self, path: str) -> None: ...
+    def summary(self) -> str: ...
+    def to_dict(self) -> dict: ...
+```
+
+**测试**（`tests/test_paper_pipeline.py`）：
+
+- `test_paper_basic_observational`：合成 IID 数据 + 简单问题 → 得到带全部 章节的 `PaperDraft`，markdown 含关键术语
+- `test_paper_did_pipeline`：DiD 合成数据 → markdown 含 "parallel trends" 与 "Callaway" 或相应的估计量
+- `test_paper_rd_pipeline`：已知阈值的合成 RD → 输出提及 McCrary / rdrobust 且估计值接近真值
+- `test_paper_question_parser`：解析器把关键字符串映射为设计提示
+- `test_paper_tex_renders`：tex 输出含 `\section` 且数值上包含估计值
+- `test_paper_writes_to_disk`：写盘往返 + 文件存在 + 含标记子串
+- `test_paper_handles_missing_design`：未传入设计时由 `check_identification` 自动探测
+
+**家族指南**：`docs/guides/paper_pipeline.qmd`。
+
+### D3 —— P1-B：`sp.causal_text` MVP
+
+**新增模块**：`src/statspai/causal_text/`
+
+```         
+causal_text/
+    __init__.py
+    text_treatment.py      # Veitch 等（2020）文本作为处理变量
+    llm_annotator.py       # Egami 等（2024）LLM 标注的测量误差校正
+    _common.py             # 共享的嵌入与工具函数
+```
+
+**新增公开函数**（已注册，标记为 `experimental`）：
+
+1.  `sp.text_treatment_effect(data, text_col, outcome, embedding=None, embedder='hash', n_components=20, covariates=None, estimator='dml', random_state=None) -> TextTreatmentResult`
+    - 实现 Veitch-Wang-Blei（2020）"Adapting text embeddings for causal inference"：把文本当作处理变量，用嵌入投影后的特征作为混杂因素（或 作为调整变量），通过 DML 用投影表示估计 ATE。
+    - `embedder='hash'`：回退用的确定性哈希向量化器（无外部依赖）； `embedder='sbert'` 惰性导入 `sentence-transformers`； `embedder='custom'` 接受一个可调用对象 `text -> np.ndarray`。
+    - 返回 `CausalResult`，含 `estimate`、`se`、`ci`、`method`、 `diagnostics={'n_text_components': k, 'embedder': name}`。
+2.  `sp.llm_annotator_correct(annotations_llm, annotations_human=None, outcome=None, treatment=None, covariates=None, data=None, method='egami2024', alpha=0.05) -> LLMAnnotatorResult`
+    - 实现 Egami-Hinck-Stewart-Wei（2024）"Using imperfect surrogates for downstream inference"：当 LLM 标注的标签被用作处理变量 / 协变量 / 结果变量时，用一小部分人工验证子集校正下游估计量中的测量误差。
+    - 返回校正后估计量的系数、SE 与 CI；并报告验证集规模与 LLM-人工一致率 的估计。
+
+**结果类**：`TextTreatmentResult`、`LLMAnnotatorResult` —— 继承 `CausalResult`，并带额外的 `diagnostics` 键。
+
+**测试**（`tests/test_causal_text.py`）：
+
+- `test_text_treatment_recovers_synthetic_ate`：合成 DGP，其中真实 的文本衍生处理是 token 计数的已知函数 → DML 估计落在真值 2 个 SE 内
+- `test_text_treatment_hash_embedder_deterministic`：同样数据 + 种子 → 完全相同的估计
+- `test_text_treatment_custom_embedder`：可调用的 embedder 被正确采用
+- `test_llm_annotator_corrects_known_bias`：用已知混淆矩阵模拟有偏的 LLM 标签 + 人工验证子集 → 校正后的估计落在真值 2 个 SE 内，朴素估计有偏
+- `test_llm_annotator_requires_validation_subset`：缺少 `annotations_human` → 抛出清晰的 `DataInsufficient`
+- `test_text_treatment_marks_experimental`： result.diagnostics\["status"\] == "experimental"
+
+**家族指南**：`docs/guides/causal_text_family.qmd` —— 何时使用、注意事项、 如何接入 sentence-transformer 模型。
+
+### D4 —— 接线与横切改动
+
+- 在 `src/statspai/registry.py` 中注册全部 5 个新的公开函数
+- 从 `src/statspai/__init__.py` 再导出，使得 `sp.<fn>` 可用
+- 更新 `src/statspai/agent/tools.py`（必要时也更新 MCP 目录），让新函数 可被 Agent 调用
+- 把 `__version__` 与 `pyproject.toml` 提升到 **`1.6.0`**
+- 在 `[1.6.0]` 下增加 CHANGELOG 条目，含三个小节（Added / Changed / ⚠️ Correctness，如适用）
+- 更新 `mkdocs.yml` 以露出 3 篇新的家族指南
+
+## 非目标（明确的推迟项）
+
+- **不会**实现 text-as-confounder / text-as-outcome（与主题模型集成一并 推迟到 v1.7）
+- **不会**从头重写 `causal_discovery/pc.py` —— 只增加可选的 `forbidden` / `required` 参数
+- **不会**对 `sentence-transformers`、`transformers` 或 `torch` 增加硬依赖 —— 所有重量级嵌入器都惰性加载
+- `sp.paper()` 默认**不会**调用 LLM —— 编排是确定性的（只有当用户向底层 `sp.causal()` 流程传入 oracle 时才会触发 LLM-DAG）
+
+## 验收标准
+
+- `import statspai as sp` 之后，所有新的公开函数都出现在 `sp.list_functions()` 中
+- `pytest tests/test_llm_dag_loop.py tests/test_paper_pipeline.py tests/test_causal_text.py -v` → 全绿
+- 全量 `pytest -q` 保持全绿（无回归）
+- `pytest tests/reference_parity/ -q` 保持全绿
+- `python -c "import statspai as sp; r = sp.paper(<synthetic_did>, 'effect of treatment on y'); print(r.to_markdown()[:500])"` 产出非空的草稿，且至少包含 4 个具名章节
+- `python -c "import statspai as sp; r = sp.llm_dag_constrained(<df>, variables=['X','M','Y'], descriptions={...}, oracle=<echo>); print(r.summary())"` 显示迭代日志与逐边置信度
+
+## 风险与缓解措施
+
+| 风险 | 缓解措施 |
+|--------------------------|----------------------------------------------|
+| 加入带约束的 PC 并不简单，可能让现有 PC 行为回归 | `forbidden`/`required` 只作为可选 kwargs 加入；默认 `None` 精确保留原有行为；用新测试把契约钉住 |
+| `sp.paper()` 变成一个在边界情形下会崩的脆弱模板 | 每节用 `try/except` 渲染；缺失的节 → 回退为简短说明，绝不让整份草稿崩溃 |
+| LLM 标注的测量误差校正有很多算法变体 | 挑一个最简单、站得住的（Egami 2024 的插入式校正 + 配对验证），发布 MVP，写清注意事项，为 `method=` 留出扩展空间 |
+| 重量级文本嵌入器（sentence-transformers / torch）会撑大安装体积 | 在函数内部惰性导入；`embedder='hash'` 是永远可用的默认项；文档中说明 sbert 需要 `pip install statspai[text]` |
+| 新增 5 个公开函数可能带来命名冲突 | 注册前用 `sp.list_functions()` 确认没有重名 |
+
+## 顺序 / 依赖
+
+P1-A → P1-C（论文流水线*不*依赖 LLM-DAG，但二者共享面向 Agent 的注册管线 ——先做 A 以便把模式定对）→ P1-B（独立模块，可以最后做；交叉耦合最低）
+
+## 会话之外
+
+- 由 `oracle` agent 做代码评审（正确性审计）
+- 提交前做逐行自审
+- 推送到 `main`（按 `feedback_no_pr.md`，不建 PR）
+- 通知用户验收并附上摘要

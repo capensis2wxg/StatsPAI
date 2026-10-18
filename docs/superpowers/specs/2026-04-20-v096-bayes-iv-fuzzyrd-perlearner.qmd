@@ -1,0 +1,180 @@
+# StatsPAI v0.9.6 —— 贝叶斯 IV + 模糊 RD、按学习器的 Optuna、Rust 分支
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.5 关掉了三个大的「认怂」项，但留下了三个明确的后续：
+
+1.  **贝叶斯覆盖深度** —— 精确 RD 与 2×2/面板 DID 已经发布，但模糊 RD、 贝叶斯 IV 与聚束（bunching）被明确排队在后。
+2.  **Optuna 粒度** —— `auto_cate_tuned` 只调冗余模型参数（在各学习器间 共享）。若某个学习器的最终阶段 CATE 模型正则化不当，更好的冗余模型 也帮不上它。
+3.  **Rust 主干整洁** —— 1.0 应当带上 Rust 内核。现在就开分支，好把构建 wheel 的痛苦摊开消化，而不是在最后的冲刺里一次性撞上。
+
+## 2. 范围
+
+### v0.9.6 范围内
+
+- **`sp.bayes_iv(data, y, treat, instrument, covariates=None, ...)`** —— 带 联合结构方程 + 第一阶段的贝叶斯线性 IV；给出 LATE 的后验。
+- **`sp.bayes_fuzzy_rd(data, y, treat, running, cutoff, ...)`** —— 通过联合 贝叶斯局部多项式 + 比率估计量实现的模糊 RD，估计 LATE。
+- **`auto_cate_tuned(..., tune='nuisance' | 'per_learner' | 'both')`** —— 新的调参模式：对每个学习器独立采样其最终 CATE 模型的超参数，在竞赛前 为每个学习器挑出最佳配置。
+- **`feat/rust-hdfe` 分支** —— Cargo crate 骨架、PyO3 `group_demean` 桩、 通过 `statspai.panel.hdfe` 接线的纯 Python 回退。该分支**不**合并进 `main`；`main` 上的 `pyproject.toml` 保持不含 maturin。
+
+### 范围之外（仍在「下一批」清单上）
+
+- 聚束的贝叶斯估计量（Kleven 式过于结构化 / 不够面向 Agent）
+- DID / RD 的变分推断
+- 多工具变量、异质性效应的贝叶斯 IV（当前只给出依从者上的 LATE）
+- 按学习器的冗余参数调优（即每个学习器各自一套冗余超参数）—— 当前始终共享
+
+## 3. API
+
+### 3.1 `sp.bayes_iv`
+
+``` python
+def bayes_iv(
+    data: pd.DataFrame,
+    y: str,
+    treat: str,                     # 内生处理变量 D
+    instrument: str | list[str],    # 单个或多个工具变量 Z
+    covariates: list[str] | None = None,
+    *,
+    prior_late: tuple[float, float] = (0.0, 10.0),
+    prior_first_stage_sigma: float = 5.0,
+    prior_coef_sigma: float = 10.0,
+    prior_noise: float = 5.0,
+    rope: tuple[float, float] | None = None,
+    hdi_prob: float = 0.95,
+    draws: int = 2000,
+    tune: int = 1000,
+    chains: int = 4,
+    target_accept: float = 0.9,
+    random_state: int = 42,
+    progressbar: bool = False,
+) -> BayesianCausalResult
+```
+
+**联合模型**（Y 与 D 连续，Z 可单个或多个）：
+
+```         
+D = pi_0 + pi_1' * Z + pi_2' * X + v
+Y = alpha + LATE * D + beta' * X + eps
+corr(v, eps) = rho   （弱工具变量：LATE 弱识别）
+```
+
+我们把 `(v, eps)` 建模为二元正态，并对相关系数施加 `pm.LKJCholeskyCov` 先验；这样就把内生性直接编码进模型。`LATE` 的后验是我们关注的对象；该 模型会**自动**为弱识别定价（随着 `pi_1 -> 0`，HDI 变宽）。
+
+### 3.2 `sp.bayes_fuzzy_rd`
+
+``` python
+def bayes_fuzzy_rd(
+    data: pd.DataFrame,
+    y: str,
+    treat: str,           # 二值的实际接受处理 D（可能与 cutoff 一侧不同）
+    running: str,
+    cutoff: float = 0.0,
+    bandwidth: float | None = None,
+    poly: int = 1,
+    *,
+    prior_late: tuple[float, float] = (0.0, 10.0),
+    prior_slope_sigma: float = 10.0,
+    prior_noise: float = 5.0,
+    rope: tuple[float, float] | None = None,
+    hdi_prob: float = 0.95,
+    draws: int = 2000,
+    tune: int = 1000,
+    chains: int = 4,
+    target_accept: float = 0.9,
+    random_state: int = 42,
+    progressbar: bool = False,
+) -> BayesianCausalResult
+```
+
+在带宽内拟合两个局部多项式模型：Y 与 D 各自对 `(x - c)` 回归，斜率按侧 分别估计。LATE 是**比率** `itt_Y / itt_D`。我们把它建模为派生的确定性量， 这样 `late` 的后验会自动继承两个噪声通道（Wald 比率后验）。若 `prob(itt_D ≈ 0)` 较大（在断点处第一阶段很弱），`late` 的后验会变成双峰 或重尾 —— 这是正确的行为。
+
+### 3.3 `auto_cate_tuned(..., tune='per_learner')`
+
+为 `auto_cate_tuned` 增加 `tune` kwarg：
+
+| 取值 | 行为 |
+|------------------------------------|------------------------------------|
+| `'nuisance'` | **默认。** v0.9.5 行为：按 R-loss 调优共享的冗余 GBM。 |
+| `'per_learner'` | 对每个学习器，按留出集上的 R-loss 调优其*最终 CATE 模型*的超参数（若该学习器有这样的模型）；冗余模型保持默认。 |
+| `'both'` | 先调优共享冗余（`'nuisance'` 模式），再用调好的冗余为每个学习器调优其 CATE 模型（`'per_learner'` 模式）。 |
+
+对 S / T / X 这类 CATE 由结果/倾向模型解析导出的学习器，「按学习器调优」 退化为「按学习器调优冗余」（每个学习器各自做一次 GBM 搜索）。对 R / DR， 被调的是最终阶段的 `cate_model`。
+
+当 `tune in ('per_learner', 'both')` 时，输出 `result.best_result.model_info['per_learner_params']`，这是一个以学习器短 代码为键的字典。
+
+### 3.4 Rust 分支
+
+按 `docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd` 中提出的 布局开 `feat/rust-hdfe`。最少需要检入：
+
+```         
+rust/
+├── Cargo.toml
+├── statspai_hdfe/
+│   ├── Cargo.toml
+│   └── src/
+│       └── lib.rs                  # 带 group_demean 桩的 PyO3 模块
+```
+
+仅存在于分支上的改动： - `pyproject.toml` **在分支上**增加 `[tool.maturin]` 段，并把 `build-system` 改为 `"maturin"`。 - `src/statspai/panel/hdfe_rust.py` 的导入守卫：先尝试 `statspai_hdfe`， 失败则回退到现有的 Numba 内核。
+
+分支会被推送但不合并。`main` 保持构建工具链干净。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/iv.py` | 新增 —— `bayes_iv` 实现 |
+| `src/statspai/bayes/fuzzy_rd.py` | 新增 —— `bayes_fuzzy_rd` 实现 |
+| `src/statspai/bayes/__init__.py` | 导出 `bayes_iv`、`bayes_fuzzy_rd` |
+| `src/statspai/metalearners/auto_cate_tuned.py` | 增加 `tune` 参数 + 按学习器循环 |
+| `src/statspai/__init__.py` | 顶层导出 |
+| `tests/test_bayes_iv.py` | 新增 |
+| `tests/test_bayes_fuzzy_rd.py` | 新增 |
+| `tests/test_auto_cate_tuned.py` | 增加按学习器模式的测试 |
+| `pyproject.toml` | `version = "0.9.6"` |
+| `CHANGELOG.qmd` | 0.9.6 条目 |
+
+## 5. 成功标准
+
+1.  `sp.bayes_iv` 能在 n=600 时还原已知 LATE，HDI 覆盖真实值，并随着工具 变量变弱报出变宽的 HDI。
+2.  `sp.bayes_fuzzy_rd` 能在与精确 RD 等价的 DGP（完全依从）上于 HDI 内 还原已知模糊 LATE。
+3.  `auto_cate_tuned(tune='per_learner')` 产出非空的 `per_learner_params` 字典；在常数效应 DGP 上其 ATE 估计落在真值的 4σ 之内。
+4.  `auto_cate_tuned(tune='both')` 能无错运行。
+5.  全量测试仍然全绿：在 v0.9.5 的 1781 项通过基线之上没有新增失败。
+6.  `feat/rust-hdfe` 在本地存在，且带一个可编译的 `Cargo.toml`（但*不*要求 真的构建成功 —— 本规范只要求骨架就位）。
+
+## 6. 测试计划
+
+### `test_bayes_iv.py`（不少于 6 个测试）
+
+1.  `test_bayes_iv_imports_cleanly`
+2.  `test_bayes_iv_top_level_export`
+3.  `test_bayes_iv_recovers_late_strong_instrument` —— HDI 覆盖真实 LATE。
+4.  `test_bayes_iv_weak_instrument_hdi_widens` —— 弱 Z 的 SD ≥ 强 Z 情形的 2 倍。
+5.  `test_bayes_iv_multiple_instruments` —— 2 个以上工具变量仍能拟合。
+6.  `test_bayes_iv_covariates_honoured` —— 加入控制变量列表不会崩溃。
+
+### `test_bayes_fuzzy_rd.py`（不少于 5 个测试）
+
+1.  `test_bayes_fuzzy_rd_top_level_export`
+2.  `test_bayes_fuzzy_rd_full_compliance_matches_sharp` —— 完全依从 → 在 误差范围内表现得与精确 RD 一致。
+3.  `test_bayes_fuzzy_rd_partial_compliance_recovers_late`
+4.  `test_bayes_fuzzy_rd_bandwidth_shrinks_sample`
+5.  `test_bayes_fuzzy_rd_cutoff_validation`
+
+### `test_auto_cate_tuned.py`（+4 个测试）
+
+1.  `test_auto_cate_tuned_per_learner_mode`
+2.  `test_auto_cate_tuned_both_mode`
+3.  `test_auto_cate_tuned_per_learner_sets_params_key`
+4.  `test_auto_cate_tuned_invalid_tune_mode_raises`
+
+## 7. 非目标
+
+- 结构化的聚束贝叶斯估计量（Kleven 式）。推迟到 0.9.7+。
+- IV / 模糊 RD 的变分推断采样器。只用 NUTS。
+- 把 `feat/rust-hdfe` 合并进 main。明确只作为分支上的交付物。
+- 异质性效应的贝叶斯 IV。只做 LATE。

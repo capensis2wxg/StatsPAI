@@ -1,0 +1,103 @@
+# StatsPAI 生态差距分析与 v1.0 路线图
+
+**日期**：2026-04-15
+**状态**：顶层设计 —— 后续子规范的锚点
+**基线**：StatsPAI v0.7.0（54 个模块、约 8.5 万行代码、250+ 个公开函数）
+
+---
+
+## 1. 目的
+
+本文档是对 StatsPAI 进行全面升级的顶层设计锚点，目标是让它在应用计量经济学
+与因果推断领域追平 —— 并在若干维度上超越 —— 主流的 R 与 Python 生态。文档
+清点当前能力，把每个领域映射到参照生态，量化差距，并把升级拆解为十个相互
+独立的子项目。
+
+下文每个子项目都会先有自己的规范
+（`YYYY-MM-DD-sp-NN-<topic>-design.qmd`）和实施计划，然后才动手写代码。
+
+## 2. 参照生态（基准）
+
+### R（主流）
+`stats`、`fixest`、`estimatr`、`did`、`didimputation`、`DIDmultiplegt`、`honestDiD`、
+`rdrobust`、`rddensity`、`rdlocrand`、`rdpower`、`Synth`、`augsynth`、`synthdid`、
+`gsynth`、`MatchIt`、`cobalt`、`WeightIt`、`ebal`、`plm`、`grf`、`DoubleML`、
+`mediation`、`EValue`、`sensemakr`、`spatialreg`、`spdep`、`splm`、`sphet`、
+`GWmodel`、`vars`、`urca`、`rugarch`、`bvartools`、`survival`、`flexsurv`、
+`pcalg`、`bnlearn`、`MendelianRandomization`、`TwoSampleMR`、`policytree`、
+`survey`、`frontier`、`mice`、`Amelia`、`randomizr`、`DeclareDesign`。
+
+### Python（主流）
+`statsmodels`、`linearmodels`、`pyfixest`、`EconML`、`CausalML`、`DoubleML`、
+`dowhy`、`causal-learn`、`lingam`、`causalnex`、`PySAL`（`libpysal`、`esda`、
+`spreg`、`mgwr`、`splot`）、`pyblp`、`lifelines`、`scikit-survival`、`mapie`、
+`differences`、`pysyncon`、`SparseSC`。
+
+## 3. 差距矩阵（24 个领域）
+
+图例：🟢 已追平 / 🟡 可用但有差距 / 🟠 差距较大 / 🔴 缺失或仅有占位实现
+
+| # | 领域 | StatsPAI 现状 | R 基准 | Python 基准 | 差距 | 优先级 |
+|---|---|---|---|---|---|---|
+| 1 | 线性 / IV 基础 | `regress`、`iv`、`advanced_iv` | fixest, estimatr, ivreg | linearmodels, pyfixest | 缺少样本外 `predict()`；HDFE 速度落后于 fixest | 🟡 **P0** |
+| 2 | GLM / 离散选择 | logit/probit/poisson/zip/mlogit/fracreg | glm, VGAM, mlogit | statsmodels | 部分 GLM 族会抛出 `NotImplementedError` | 🟡 **P1** |
+| 3 | DID（静态 + 错位实施） | did/CS/SA/bacon/honest/sdid/DDD/imputation/stacked/continuous | did, didimputation, DIDmultiplegt, honestDiD, fixest::sunab | differences, pyfixest | 🟢 **业界领先**；仅缺少显式的 ETWFE（Wooldridge 2021）API | 🟢 **P2** |
+| 4 | RD / RKD / RDD | rdrobust/rdplot/rdbw/rkd/rd_honest/rdmc/rdms | rdrobust, rddensity, **rdlocrand**, **rdpower**, rdmulti | rdrobust-py | 缺少 `rdlocrand`（局部随机化）与 `rdpower`（功效） | 🟡 **P1** |
+| 5 | 合成控制 | SCM/gsynth/sdid/augsynth/conformal_synth/staggered | Synth, augsynth, synthdid, gsynth, tidysynth | pysyncon, SparseSC | 🟢 已追平 | 🟢 **P3** |
+| 6 | 匹配 / 加权 | NN/CEM/ebal/PS | **MatchIt**, cobalt, WeightIt, Matching | causalinference | 缺少遗传 / 最优 / 基数匹配；平衡性报告偏浅 | 🟠 **P1** |
+| 7 | 面板 | FE/RE/Within/Between/FD/GMM/FGLS/interactive_fe/unitroot | plm, fixest, panelvar | linearmodels | 缺少 CCE（Pesaran）、面板协整、动态面板诊断 | 🟡 **P1** |
+| 8 | 推断 / 重抽样 | WCB/AIPW/Fisher/Conley/CR2/bootstrap | sandwich, fwildclusterboot, clubSandwich | wildboottest, pyfixest | 🟢 已追平 | 🟢 **P2** |
+| 9 | ML-因果核心 | causal_forest / metalearners / DML / TMLE / conformal_cate | grf, DoubleML, tlverse | EconML, CausalML, DoubleML | 缺少完整的 GRF 核 API、IV 森林、局部线性森林、正交森林 | 🟠 **P0** |
+| 10 | 深度因果 | TARNet / CFRNet / DragonNet / DeepIV | — | EconML deep, CausalML | 训练稳定性问题；表征平衡的深度不足 | 🟠 **P2** |
+| 11 | 因果发现 | NOTEARS / PC | **pcalg, bnlearn** | causal-learn, **lingam**, causalnex, dowhy | 缺少 FCI / GES / LiNGAM 家族 / GIES / 非线性 NOTEARS / 评分指标 | 🔴 **P1** |
+| 12 | 中介分析 | mediate（基础） | **mediation (Imai)**, cmaverse | CausalML mediation | 缺少 Imai ρ 敏感性、时变中介变量、顺序多中介 | 🟠 **P1** |
+| 13 | IV 专题 | bartik / shift_share / mendelian / liml / jive | AER, ivreg, **ivmodel**, **ShiftShareSE** | linearmodels | 缺少 Anderson-Rubin 稳健推断、Andrews-Stock-Sun 2024、后 LASSO IV | 🟡 **P1** |
+| 14 | 敏感性 / 界限 | Lee / Manski / Oster / E-value / sensemakr / breakdown | sensemakr, EValue, bounds, tipr | sensemakr-py | 🟢 已追平 | 🟢 **P2** |
+| 15 | 功效 / 设计 | RCT/DID/RD/IV/cluster | pwr, **DeclareDesign**, PowerUpR | statsmodels.power | 缺少 DeclareDesign 式的「声明→诊断」工作流 | 🟡 **P2** |
+| 16 | **空间计量经济学** | SAR/SEM/SDM（ML，稠密矩阵） | **spatialreg+spdep+splm+sphet+GWmodel** | **PySAL (spreg+esda+mgwr)** | 🔴 **最大差距**：权重构造器、Moran/LISA、GWR/MGWR、空间面板/GMM、稀疏求解器 | 🔴 **P0** |
+| 17 | 时间序列 | VAR / Granger / IRF / breaks / cointegration | **vars, urca, rugarch, bvartools, tsDyn** | statsmodels.tsa | 缺少 ARIMA/SARIMAX 封装、状态空间 Kalman、BVAR、MSVAR、GARCH、**局部投影（Jordà）** | 🟠 **P1** |
+| 18 | 生存分析 | Cox / KM / survreg / logrank | **survival, flexsurv, rms** | lifelines, scikit-survival | 缺少脆弱性模型、AFT 族、竞争风险、时变协变量 | 🟡 **P2** |
+| 19 | 非参数 | lpoly / kdensity | locfit, KernSmooth, np | KDEpy | 缺少 CV 带宽、多元核、自适应核 | 🟡 **P2** |
+| 20 | 分解 | Oaxaca / Gelbach | oaxaca, dineq | — | 缺少 RIF 分解（Firpo-Fortin-Lemieux）、DFL 密度分解、Ñopo | 🟠 **P1** |
+| 21 | 实验设计 | randomize / balance / attrition / optimal_design | **randomizr, DeclareDesign, blockTools** | — | 缺少区组/分层/协变量自适应/重随机化 | 🟠 **P1** |
+| 22 | 调查抽样 | svydesign / svymean / svytotal / svyglm | **survey（金标准）, srvyr** | samplics | 缺少重复权重（BRR/JK）、校准（raking/后分层）、小域估计 | 🟠 **P1** |
+| 23 | 结构模型 | BLP | — | **pyblp** | 缺少 pyblp 深度对齐（供给侧、micro-BLP、弹性）；AIDS 系统缺失 | 🟠 **P2** |
+| 24 | 缺失数据 / MR | mice / mendelian(ivw/egger/median) | mice, Amelia, **TwoSampleMR, MR-PRESSO** | miceforest | MR 缺 PRESSO/RAPS/CAUSE/共定位；MI 缺 Amelia EM | 🟠 **P2** |
+
+## 4. 战略判断
+
+- **三条 P0 战线**是本次升级周期的主战场：
+  1. **空间计量经济学（#16）** —— 绝对差距最大、投资回报最高、也是最自然的切入点。
+  2. **ML-因果深化（#9）** —— 前沿战场；`causal_forest` 的外壳已有，但缺少 `grf` 的广度。
+  3. **基础设施补齐（#1、#2）** —— 不够光鲜，但每次开发都会碰到。
+- **三个 🟢 领域**（DID、SCM、敏感性分析）已达世界一流水平 —— 冻结现状，只做少量打磨。
+
+## 5. 子项目拆解
+
+| ID | 标题 | 范围 | 体量 | 冲刺 |
+|---|---|---|---|---|
+| **SP-01** | 空间计量全栈 | #16 | XL（4–6 周） | **S1** |
+| **SP-02** | GRF 全面对齐 | #9 | L（3–4 周） | S2 |
+| **SP-03** | 基础设施补齐 | #1、#2 | M（2 周） | S2 |
+| **SP-04** | 时间序列现代化 | #17 | L（3–4 周） | S3 |
+| **SP-05** | 因果发现广度 | #11 | M（2–3 周） | S3 |
+| **SP-06** | 匹配 / 加权升级 | #6 | M（2 周） | S3 |
+| **SP-07** | RD / IV 稳健推断 | #4、#13 | M（2 周） | S4 |
+| **SP-08** | 分解 + 中介深度 | #12、#20 | M（2 周） | S4 |
+| **SP-09** | 实验设计 / 调查 | #21、#22 | M（2–3 周） | S4 |
+| **SP-10** | 生存 / 非参数 / 结构模型 | #18、#19、#23 | M（2–3 周） | S5 |
+
+**总体周期**：5 个冲刺，约 3–4 个月，达成 v1.0。
+
+## 6. 执行原则（适用于每一个子项目）
+
+1. **串行打磨优于并行铺开** —— 一个子项目收尾后再开启下一个。
+2. 每个子项目遵循：**头脑风暴 → 写规范 → 写计划 → 实现 → 验证 → 合并**。
+3. 每个新增公开函数必须具备：统一的 `CausalResult`/`EconometricResults` 返回值、`.summary()` / `.to_latex()` / `.cite()`、NumPy 风格 docstring、不少于 3 个 pytest 用例，并与 R 或参照 Python 实现做交叉验证（各模块需写明容差）。
+4. 导入约定：`import statspai as sp`。所有示例统一使用 `sp.xxx`。
+5. 直接推送到 `main`（按用户偏好）；除非明确要求，否则不建 PR。
+
+## 7. 第一个子项目
+
+**SP-01（空间计量全栈）**在本文档提交后立即进入头脑风暴阶段。其规范位于
+`specs/2026-04-15-sp-01-spatial-full-stack-design.qmd`。

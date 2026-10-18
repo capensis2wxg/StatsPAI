@@ -1,0 +1,106 @@
+# StatsPAI v0.9.15 —— `BayesianMTEResult` 的多项 `.tidy()`
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.13 在 `BayesianMTEResult` 上增加了 ATT / ATU 的分层不确定性字段， v0.9.14 把它们接进了 `summary()`。但 `.tidy()` 仍只返回描述 ATE（主估计量） 的单行结果。做 broom 式元分析的用户
+
+``` python
+table = pd.concat([r.tidy() for r in results])
+```
+
+无法在这条流水线里拿到 ATT / ATU 的不确定性，只能退回读取属性。 v0.9.15 补齐这个缺口：`.tidy(terms=['ate', 'att', 'atu'])` 返回同样 broom 结构的 3 行 DataFrame。
+
+为此需要一处小的上游改动：ATT / ATU 需要一个 `prob_positive` 标量才能匹配 该结构。当前 `_integrated_effect` 在算完后验摘要后就丢掉了逐次抽样的样本， 我们把 4 元组返回值扩展为 5 元组 `(mean, sd, hdi_lower, hdi_upper, prob_positive)`，并把新标量存到结果对象上。
+
+## 2. 范围
+
+### v0.9.15 范围内
+
+- **`BayesianMTEResult.tidy(terms=None | str | Sequence[str])`**：
+  - `terms=None`（默认）：行为不变 —— 单行 ATE，向后兼容。
+  - `terms='ate'` / `'att'` / `'atu'`：返回该项的单行结果。
+  - `terms=['ate', 'att']` 等：多行 DataFrame。
+  - 非法项名以清晰的 `ValueError` 拒绝。
+- **`BayesianMTEResult` 的新字段**：
+  - `att_prob_positive: float = float('nan')`
+  - `atu_prob_positive: float = float('nan')`
+- **`_integrated_effect` 返回 5 元组** `(mean, sd, hdi_lower, hdi_upper, prob_positive)`。调用方解包后写入新字段。
+
+### 范围之外（推迟）
+
+- 其他贝叶斯估计器（DID/RD/IV/fuzzy_rd/hte_iv）上的 `.tidy(terms=...)` —— 它们没有 ATT/ATU，其主估计量行就是它们该返回的 内容。
+- 完整的二元正态 HV。
+- Rust 第二阶段。
+
+## 3. API
+
+``` python
+def tidy(
+    self,
+    conf_level: Optional[float] = None,
+    terms: Union[None, str, Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Broom 风格的整洁摘要。
+
+    Parameters
+    ----------
+    conf_level : float, optional
+        对贝叶斯输出无效；HDI 水平在拟合时确定。
+        保留此参数是为了与 ``CausalResult.tidy`` 对齐。
+    terms : None | str | sequence of str, default ``None``
+        要包含哪些项：
+
+        - ``None`` 或 ``'ate'`` —— 单行 ATE（向后兼容）。
+        - ``'att'`` / ``'atu'`` —— 该项的单行结果。
+        - 形如 ``['ate', 'att', 'atu']`` 的列表 —— 多行。
+
+        未知名称抛出 ``ValueError``。若请求了 ATT / ATU 项，但对应的
+        SD 字段为 NaN（例如拟合时没有未处理个体，或结果是从更早的
+        快照反序列化而来），该行的不确定性列填 NaN，但该行仍然输出。
+    """
+```
+
+返回的每行结构：
+
+| 列              | 取值                                     |
+|-----------------|------------------------------------------|
+| `term`          | `'ate'` / `'att'` / `'atu'`              |
+| `estimate`      | 后验均值                                 |
+| `std_error`     | 后验 SD                                  |
+| `statistic`     | estimate / std_error（SD 为 0 时为 NaN） |
+| `p_value`       | NaN（非频率学派）                        |
+| `conf_low`      | HDI 下界                                 |
+| `conf_high`     | HDI 上界                                 |
+| `prob_positive` | 后验 P(term \> 0)                        |
+| `hdi_prob`      | 拟合时的 HDI 覆盖水平                    |
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/_base.py` | 覆写 `BayesianMTEResult.tidy(terms=...)`；新增两个字段；docstring |
+| `src/statspai/bayes/mte.py` | `_integrated_effect` 返回 5 元组；调用方把 `prob_positive` 接入字段 |
+| `tests/test_bayes_mte_tidy.py` | 新增 —— 项解析、行形状、结构、非法项校验 |
+| `pyproject.toml` | `version = "0.9.15"` |
+| `CHANGELOG.qmd` | 0.9.15 条目 |
+
+## 5. 测试计划
+
+1.  `test_tidy_none_back_compat` —— 默认返回单行 ATE，结构与 v0.9.14 完全一致。
+2.  `test_tidy_ate_single_row` —— 显式传入 `terms='ate'`。
+3.  `test_tidy_att_single_row` —— `terms='att'` 返回 `term='att'` 的一行， estimate/SD 为有限值。
+4.  `test_tidy_all_three_terms` —— `terms=['ate', 'att', 'atu']` 按顺序返回 3 行。
+5.  `test_tidy_invalid_term_raises` —— `terms=['bogus']`。
+6.  `test_tidy_row_schema` —— 列名与规范定义的集合一致。
+7.  `test_tidy_backward_compat_nan_prob_positive` —— 构造 `att_prob_positive` 为 NaN 的桩对象 → ATT 行仍然输出，其 `prob_positive` 为 NaN。
+8.  `test_tidy_concat_workflow` —— `pd.concat([r1.tidy(terms=['ate','att']), r2.tidy(terms=['ate','att'])])` 生成结构良好的 4 行 DataFrame。
+
+## 6. 成功标准
+
+1.  默认路径的 `.tidy()` 行为不变（向后兼容）。
+2.  `terms=['ate', 'att', 'atu']` 返回 3 行且结构正确。
+3.  子群体为空的情形输出不确定性列为 NaN 的行（绝不崩溃）。
+4.  两轮评审，无阻塞发布的问题。
+5.  贝叶斯聚焦测试套件保持全绿。

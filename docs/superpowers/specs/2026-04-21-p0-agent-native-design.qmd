@@ -1,0 +1,109 @@
+# P0 —— 面向 Agent 的覆盖率与可恢复性（2026-04-21）
+
+> 目标：让 StatsPAI 从「原则上面向 Agent」走向「面向 Agent 且有可度量的 覆盖率」，沿两条轴推进 —— **可触达什么**（MCP 面）与**可恢复什么** （失败 → 修复的闭环）。
+
+## 背景（探测得到的事实）
+
+- `sp.list_functions()` = **已注册 889 个函数**
+- `sp.agent.tool_manifest()` = **8 个手工挑选的工具** → 99.1% 的覆盖率缺口
+- `sp.function_schema(name)` 已经能为任意已注册函数产出 OpenAI 格式的 schema（字段完整 —— 名称/描述/参数，含 enum 与 required）
+- `sp.all_schemas()` 已经能批量导出全部 889 个 schema
+- `CausalResult` / `EconometricResults` 具备 `.summary / .tidy / .glance / .cite / .to_latex / .to_docx / .next_steps`，但**没有 `to_dict()` / `to_json()` / `for_agent()`** —— 序列化逻辑外挂在 `agent/tools.py::_default_serializer` 中，比较脆弱
+- `agent/remediation.py` 中的 `REMEDIATIONS` = 11 条，多为泛化的 Python 错误 —— 没有因果推断特有的恢复路径
+- `mcp_server.py::SERVER_VERSION = "0.9.17"` —— 相对项目 v1.5.0 存在版本 漂移（发布流程没有传播过来）
+
+## 范围
+
+采用 **A+B 混合**方案：
+
+- **A（覆盖率杠杆）**：在现有 `all_schemas()` 之上通过自动生成，把 MCP 工具 数量从 8 提升到约 150。使用基于分类的白名单，以免把每个工具函数都暴露 出去。
+- **B（深度）**：为结果类增加 Agent 可读的序列化，把补救注册表扩展到覆盖 因果特有的失败模式，同步 server 版本，并让 `sp.recommend` / `sp.compare_estimators` 成为一等公民的 MCP 工具。
+
+## 交付物
+
+### D1 —— 在结果类上提供 `to_dict()` / `for_agent()`
+
+- `CausalResult.to_dict()` → 扁平、JSON 安全的字典，含 `method`、 `estimand`、`estimate`、`se`、`pvalue`、`ci`、`alpha`、`n_obs`、 `diagnostics`、`citation_key`，以及可选的 `detail_head`（明细 DataFrame 的前 N 行）
+- `CausalResult.for_agent()` → 额外加入 `warnings`、`next_steps`（精简版）、 `assumption_checks`（取自 model_info）与 `suggested_functions`（接下来 该调用的其他 `sp.xxx`）
+- `EconometricResults.to_dict()` → 额外加入以 term 为键的 `coefficients`， 每项含 estimate/se/t/p/CI
+- `EconometricResults.for_agent()` → 同上 + glance() 风格的模型摘要
+- `agent/tools.py` 中现有的 `_default_serializer` 缩减为一行：调用 `result.to_dict()`，并保留向后兼容的回退
+
+### D2 —— `auto_tool_manifest()` + 合并后的 `tool_manifest()`
+
+- 新增 `agent/auto_tools.py`：
+  - `auto_tool_manifest(categories=None, exclude=None)` → 遍历注册表，为 每个 `category` 落在白名单内、且未被显式排除的函数返回 MCP 工具规格
+  - 默认白名单：`{causal, regression, panel, inference, diagnostics, smart, decomposition, robustness, postestimation, survival, survey}`
+  - 默认排除：绘图、I/O、CLI 辅助函数、下划线开头的私有名称，以及已知依赖 torch 的深度学习估计器（排除它们是为了让 manifest 在没有可选依赖时也 能加载）
+- `tool_manifest()`（位于 `agent/tools.py`）变为一个合并器：名称冲突时以 8 个手工挑选的工具为准，其余由自动生成填补
+- 目标：manifest 规模 ≥ 100 个工具，≤ 250 个工具（刻意设上限，以保证载荷 不超出 Claude/GPT 的工具列表限制）
+
+### D3 —— 补救注册表扩展
+
+为 `REMEDIATIONS` 增加约 15 条，键接到因果特有的失败模式。每条包含 `category`、`diagnosis`、`fix`（具体的下一步 sp 函数）与一个正则 `match`：
+
+| category | 典型报错信息 | 建议的修复 |
+|------------------------|------------------------|------------------------|
+| `overlap_violation` | "propensity score.\*extreme", "no overlap" | 截尾 / 使用 `sp.ebalance` / `sp.sbw` |
+| `parallel_trends_fail` | "pre-trend.\*reject", "parallel trends violated" | `sp.honest_did` / `sp.callaway_santanna` |
+| `mccrary_reject` | "McCrary.\*reject", "density discontinuity" | `sp.rd_manipulation_test`；考虑 donut RD |
+| `dml_ortho_fail` | "orthogonality.\*failed", "score mean ≠ 0" | 增加折数 / 使用更强的冗余学习器 |
+| `bayes_convergence` | "rhat.\*\>", "low ess", "divergences" | 增加 draws/tune；重参数化；`target_accept=0.95` |
+| `negative_weights_twfe` | "negative weights", "forbidden comparisons" | `sp.bacon_decomposition`；改用 CS / dCdH |
+| `small_cohort` | "cohort size.\*\<", "thin cohort" | 合并队列，或报告简单 ATT |
+| `hausman_reject` | "Hausman.\*reject" | 用 FE 取代 RE；检查聚类结构 |
+| `ci_coverage_fail` | "conformal.*coverage", "empirical coverage.*\<" | 增大校准集；`sp.jackknife_plus` |
+| `sbw_infeasible` | "SBW infeasible", "balance constraints.\*tight" | 放宽容差；剔除倾向得分极端的个体 |
+| `placebo_fail` | "placebo.\*significant", "pre-period placebo rejects" | 检查预期效应或坏的控制变量 |
+| `iv_exclusion_fail` | "Hansen J.*reject", "over-id.*reject" | 丢弃最弱的工具；考虑局部识别 |
+| `matching_unbalanced` | "SMD.*\>.*0.1", "covariates unbalanced after match" | 收紧卡尺；尝试 `sp.cem` / `sp.ebalance` |
+| `synth_no_pretrend_fit` | "pre-treatment RMSE.\*high", "poor donor fit" | 扩大供体池；尝试 `sp.synthdid` / MSCM |
+| `identification_unknown` | "design could not be inferred" | 显式调用 `sp.check_identification`；传入 `design=` |
+
+### D4 —— 收尾事务
+
+- `mcp_server.py::SERVER_VERSION` 在导入时从 `statspai.__version__` 读取 （单一事实来源）
+- 向手工维护的 `TOOL_REGISTRY` 中加入：`recommend`、`compare_estimators`、 `bacon_decomposition`、`honest_did`、`sensitivity`、`spec_curve` （当前缺失的高价值 Agent 工具）
+
+## 非目标（推迟到 P1）
+
+- DataFrame 直通传输（MCP stdio 按设计只传文本 —— 对 v1 而言 CSV 往返 已经够用）
+- 有 LLM 参与的因果发现
+- `sp.causal_text` 模块
+- Claude Desktop 的 Lighthouse 演示（可以在 P0 全绿之后落地）
+
+## 测试计划
+
+`tests/test_agent.py` 中新增/扩展：
+
+1.  `TestResultSerialization`：
+    - `CausalResult.to_dict()` 能经 `json.dumps` 往返
+    - 键齐备：method、estimand、estimate、se、pvalue、ci、n_obs
+    - `for_agent()` 包含 warnings/next_steps/suggested_functions
+    - `EconometricResults.to_dict()` 含 coefficients 映射，每个 term 有 estimate/se/p_value
+2.  `TestAutoManifest`：
+    - `auto_tool_manifest()` 返回 ≥ 100 个工具
+    - 每个自动生成的工具都有合法的 JSON schema（type/properties/required）
+    - manifest 端到端可 JSON 序列化
+    - `tool_manifest()` 保留全部 8 个经典名称（向后兼容）
+    - 合并后无重复的工具名
+3.  `TestRemediationCoverage`：
+    - 每个新的补救类别都能匹配其样例报错信息
+    - 对全部 ≥ 25 个模式，`remediate()` 都返回 `matched=True`
+4.  `TestVersionSync`：
+    - `SERVER_VERSION == statspai.__version__`
+
+## 推进顺序
+
+1.  D1 + D1 测试 → 提交 `feat(agent): result.to_dict() + for_agent()`
+2.  D2 + D2 测试 → 提交 `feat(agent): auto-generated MCP tool manifest`
+3.  D3 + D3 测试 → 提交 `feat(agent): causal-specific remediation`
+4.  D4 + D4 测试 → 提交 `chore(agent): version sync + curated tools`
+5.  跑全量 `pytest -q` + `pytest tests/test_agent.py -q` → 提交任何修复
+6.  通知用户验收
+
+## 风险
+
+- **自动生成的 schema 可能缺少枚举值**：对于 docstring 中没有清楚声明取值 范围的参数。缓解措施：合并时允许手工维护的 schema 覆盖，因此只要我们 发现某处的 Agent 体验不佳，就可以把它提升为手工维护，且不构成破坏性 变更。
+- **白名单中依赖 torch 的估计器**在构建 manifest 时可能 ImportError。 缓解措施：显式的拒绝列表包含 `dragonnet`、`deepiv`、`neural_causal_*` 等；manifest 构建过程对每个函数都包了 try/except。
+- **注册表自动填充的副作用**：`all_schemas()` 会触发 `_ensure_full_registry()`，从而导入每个子模块。这在首次调用 `sp.help()` 时就已经会发生，因此没有新增副作用。

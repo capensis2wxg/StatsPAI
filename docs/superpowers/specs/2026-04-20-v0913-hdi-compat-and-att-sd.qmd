@@ -1,0 +1,97 @@
+# StatsPAI v0.9.13 —— arviz HDI 参数兼容 + ATT/ATU 不确定性
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+有两项在 v0.9.10 / v0.9.11 / v0.9.12 的代码评审中被明确推迟：
+
+1.  **`az.hdi(..., hdi_prob=...)` 在 arviz ≥ 0.18 中改名为 `prob`。** 我们所有 贝叶斯估计器都调用 `az.hdi(samples, hdi_prob=self.hdi_prob)`。一旦用户把 arviz 升级过该版本，每个贝叶斯估计器都会返回畸形结果。现在就发布一个 极小的兼容垫片，让这次升级变成无感操作。
+
+2.  **`BayesianMTEResult.att` / `.atu` 只暴露后验均值。** 内部的 `_integrated_effect` 辅助函数其实已经算了 `(mean, sd)`，但 v0.9.12 把 SD 丢掉了。没有 SD / HDI，用户无法判断 ATT 与 ATU 的差异是否有意义。
+
+两者都是小而精准、单位代码行价值很高的改动。
+
+## 2. 范围
+
+### v0.9.13 范围内
+
+- **`_az_hdi_compat(samples, hdi_prob=...)`**（位于 `src/statspai/bayes/_base.py`）—— 先调用 `az.hdi(samples, hdi_prob=...)`，遇到 `TypeError` 时回退到 `az.hdi(samples, prob=...)`。所有内部贝叶斯代码都改用这个垫片，不再直接 调用 `az.hdi(...)`。
+
+- **在 `BayesianMTEResult` 上提供 ATT / ATU 的后验 SD + HDI**：
+
+  - `att_sd`、`att_hdi_lower`、`att_hdi_upper`
+  - `atu_sd`、`atu_hdi_lower`、`atu_hdi_upper`
+
+- **`_integrated_effect` 返回完整的后验摘要**（mean、sd、hdi_low、hdi_high）； 调用方把四项全部记录进结果。
+
+- **汇总输出**在 SD 非 NaN 时打印带不确定性的 ATT / ATU。
+
+### 范围之外
+
+- 完整的二元正态 HV。
+- Rust 第二阶段。
+- 个体层面的 ATT（只做总体层面的积分 ATT）。
+
+## 3. API 变更
+
+### 3.1 `_az_hdi_compat`
+
+``` python
+def _az_hdi_compat(samples, hdi_prob=0.95):
+    _, az = _require_pymc()
+    try:
+        return np.asarray(az.hdi(samples, hdi_prob=hdi_prob)).ravel()
+    except TypeError:
+        return np.asarray(az.hdi(samples, prob=hdi_prob)).ravel()
+```
+
+`statspai.bayes.*` 中的每一处 `az.hdi` 调用都改为经由该包装函数。
+
+### 3.2 `BayesianMTEResult` 的新字段
+
+追加（默认为 NaN → 保持序列化结果的向后兼容）：
+
+```         
+att_sd, att_hdi_lower, att_hdi_upper
+atu_sd, atu_hdi_lower, atu_hdi_upper
+```
+
+`ate_sd` **不是**新字段 —— `posterior_sd` 已覆盖主估计量。
+
+### 3.3 `summary()` 更新
+
+当 ATT/ATU 的 SD 有限时，打印形如 `ATT: 1.234 (sd 0.567, HDI [...])`。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|------------------------------------|------------------------------------|
+| `src/statspai/bayes/_base.py` | 新增 `_az_hdi_compat`；`BayesianMTEResult` 新字段；扩展 `summary()` |
+| `src/statspai/bayes/mte.py` | `_integrated_effect` 返回完整摘要；调用方接入结果对象 |
+| `src/statspai/bayes/did.py`、`rd.py`、`iv.py`、`fuzzy_rd.py`、`hte_iv.py` | 把 `az.hdi(...)` 调用替换为垫片 |
+| `tests/test_bayes_mte_uncertainty.py` | 新增 |
+| `tests/test_bayes_hdi_compat.py` | 新增 |
+| `pyproject.toml` | `version = "0.9.13"` |
+
+## 5. 测试计划
+
+### `test_bayes_hdi_compat.py`
+
+1.  `test_shim_accepts_hdi_prob_kwarg` —— 转发给 `az.hdi`。
+2.  `test_shim_handles_typeerror` —— 用 monkeypatch 让 `az.hdi` 在收到 `hdi_prob` 时报错，确认能回退到 `prob`。
+3.  `test_shim_returns_length_2_array`。
+
+### `test_bayes_mte_uncertainty.py`
+
+1.  `test_att_atu_sd_fields_populated` —— 拟合后两个 SD 均为有限值。
+2.  `test_att_atu_hdi_brackets_posterior_mean` —— `hdi_lower < mean < hdi_upper`。
+3.  `test_summary_shows_att_atu_uncertainty` —— 字符串包含 `sd` 与 `HDI [`。
+4.  `test_empty_population_nan_safe` —— 全部接受处理的 DGP → ATU 的 SD 为 NaN，但不崩溃。
+
+## 6. 成功标准
+
+1.  现有 arviz 仍然可用。
+2.  模拟的未来版 arviz（遇到 `hdi_prob` 就报错）能通过回退路径正常工作。
+3.  在典型拟合上 `r.att_sd`、`r.atu_sd` 为有限值。
+4.  两轮代码评审，无阻塞发布的问题。

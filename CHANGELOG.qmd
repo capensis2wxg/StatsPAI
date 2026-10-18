@@ -1,0 +1,3275 @@
+# 变更日志
+
+StatsPAI 所有值得记录的变更都会写在这个文件里。
+
+## \[1.6.0\] — 2026-04-21 — P1 智能体原生 × 方法前沿 + 智能体原生基础设施
+
+本版本为纯增量更新，推进两个竞争方向：
+
+- **智能体原生** — 闭环 LLM-DAG、端到端 `sp.paper()` 流程、每个新函数的完整注
+  册表/智能体卡片元数据、带有 `recovery_hint` / `diagnostics` / `alternative_functions` 
+  载荷的类型化异常体系（`StatsPAIError` + 6 个子类）、结果对象的 `.violations()` 
+  / `.to_agent_summary()` 方法，以及在每个旗舰指南中自动生成的 `## For Agents` 
+  区块。
+- **方法前沿** — 五种 2020 年之后提出的孟德尔随机化估计量（`mr_lap`、`mr_clust`、
+  `grapple`、`mr_cml`、`mr_raps`）、长面板双重机器学习（Double-ML，`sp.dml_panel`）、
+  带约束的 LLM 辅助 PC 发现，以及两个 `causal_text` MVP（文本作为处理变量、LLM 
+  标注器测量误差校正）。
+
+总计：新增一个顶层流程（`sp.paper`）、四个支持 LLM 的 DAG/文本估计量（`sp.llm_dag_constrained`、
+`sp.llm_dag_validate`、`sp.text_treatment_effect`、`sp.llm_annotator_correct`）、
+带约束的 PC 发现（`sp.pc_algorithm(forbidden=, required=)`）、五个 MR 前沿估计
+量（`sp.mr_lap` 等）、一个长面板 DML 估计量（`sp.dml_panel`）、36 张已填充的智
+能体卡片（v1.5.1 之前为 0 张），以及分布在 19 篇指南中的 26 个 `## For Agents` 
+区块。
+
+### 新增 — P1-A：闭环 LLM 辅助因果发现
+
+- **`sp.llm_dag_constrained`** — 持续执行 **提出 → 带约束的 PC → CI 检验验证 →
+  降级**，直至收敛或达到 `max_iter`。逐边返回 `llm_score` + `ci_pvalue` + `source`
+  （`required` / `forbidden` / `demoted` / `ci-test`），使每条保留的边都有 LLM
+  先验和数据的共同支持。`result.to_dag()` 可往返转换为 `statspai.dag.DAG`，供
+  后续 `recommend_estimator()` 使用。
+- **`sp.llm_dag_validate`** — 对任意已声明的 DAG 逐边进行 CI 检验审计；标记其
+  所蕴含的条件独立性与数据一致的边（即看起来可能是伪边的边）。
+- **`sp.pc_algorithm(forbidden=, required=)`** — 将背景知识约束注入 PC。默认值 
+  `None` 逐位保持此前的契约不变。如果必选边和禁用边指向同一节点对，则必选边优
+  先。
+- 新增 18 项测试（`tests/test_llm_dag_loop.py`）。
+- 系列指南：`docs/guides/llm_dag_family.qmd`。
+
+### 新增 — P1-C：数据 → 论文初稿流程
+
+- **`sp.paper(data, question, ...)`** — 构建于 `sp.causal()` 之上的编排器，可
+  解析自然语言问题、运行完整的 `diagnose → recommend → estimate → robustness`
+  流程，并组装包含 7 个部分的 `PaperDraft`（Question / Data / Identification /
+  Estimator / Results / Robustness / References）。
+- **`PaperDraft`** 提供 `to_markdown()` / `to_tex()` / `to_docx()` / `write(path)` 
+  / `to_dict()` / `summary()`，并具有 `parsed_hints` 属性，用于公开问题解析器
+  提取的信息。
+- 轻量级问题解析器（`statspai.workflow.paper.parse_question`）可识别 "effect of 
+  X on Y"、"Y \~ X"、DiD / RD / IV / RCT 设计提示、"instrument(ing) `Z`"、"discontinuity 
+  at `c`"、"running variable `X`"。显式 kwargs 始终优先。
+- 按部分隔离失败：某个估计阶段失败时，会生成 "Pipeline notes" 部分，而不会导致
+  初稿崩溃。
+- 新增 27 项测试（`tests/test_paper_pipeline.py`）。
+- 系列指南：`docs/guides/paper_pipeline.qmd`。
+
+### 新增 — P1-B：`sp.causal_text`（实验性 MVP）
+
+- **`sp.text_treatment_effect`** — Veitch-Wang-Blei（2020 UAI，MVP）提出的文本
+  作为处理变量 ATE；通过嵌入投影 OLS 计算，并使用 HC1 标准误。默认使用哈希嵌入
+  器（确定性且无需依赖）；可通过 `pip install sentence-transformers` 按需安装 
+  `sbert`；也支持自定义可调用嵌入器。
+- **`sp.llm_annotator_correct`** — Egami-Hinck-Stewart-Wei（2024）提出的二元 LLM
+  派生处理变量测量误差校正。采用 Hausman 风格：在人工验证的子集上估计 `p_01` / 
+  `p_10`（两个类别均至少包含 30 行），然后将朴素系数除以 `1 - p_01 - p_10`。
+  进行一阶标准误校正；当 LLM 不含任何信息时，抛出 `IdentificationFailure`。
+- 两种方法都继承 `CausalResult`，在 `result.diagnostics` 中显示 `status: "experimental"`，
+  并附带完整的智能体卡片元数据（`assumptions` / `pre_conditions` / `failure_modes` 
+  / `alternatives`）。
+- 新增 20 项测试（`tests/test_causal_text.py`）。
+- 系列指南：`docs/guides/causal_text_family.qmd`。
+
+### 新增 — MR 方法前沿（`src/statspai/mendelian/frontier.py`）
+
+- **`sp.mr_lap`** — 校正样本重叠的 IVW（Burgess、Davies 和 Thompson 2016 年的
+  闭式偏差校正；概念上与 Mounier-Kutalik 2023 年的 MR-Lap 相对应）。必需输入：
+  `overlap_fraction` 和 `overlap_rho`（例如来自 LD-score 回归）。当 `overlap=0` 
+  时，结果与朴素 IVW 完全一致。
+- **`sp.mr_clust`** — 通过 Wald 比值上的有限高斯混合模型进行聚类孟德尔随机化（Foley、
+  Mason、Kirk 和 Burgess 2021）。使用带 SNP 特异性测量 SE 的 EM，可选包含 θ=0 
+  的零效应聚类，并由 BIC 选择 K。返回每个聚类的估计值、SNP 到聚类的归属概率，
+  以及 BIC 路径。
+- **`sp.grapple`** — 基于剖面似然的 MR，同时对弱工具变量和均衡多效性保持稳健（Wang、
+  Zhao、Bowden、Hemani 等人 2021 年的单暴露变量版本）。通过 L-BFGS-B 联合对因
+  果 β 和多效性方差 τ² 进行 MLE；SE 根据观测 Fisher 信息计算。
+- **`sp.mr_cml`** — 具有 L0 稀疏多效性的约束最大似然 MR，即 MR-cML-BIC 变体（Xue、
+  Shen 和 Pan 2021）。通过分块坐标下降联合更新因果 β、真实暴露效应和 K 稀疏多
+  效性向量；K 由 BIC 选择。
+- **`sp.mr_raps`** — 稳健调整剖面分数（Zhao、Wang、Hemani、Bowden 和 Small 2020，
+  *Annals of Statistics* 48(3)）。基于剖面似然的 MR，使用 Tukey 双权损失 + 对
+  数方差调整；结构模型与 GRAPPLE 相同，但对严重多效性离群值更稳健。使用 M 估计
+  量公式计算三明治 SE。
+
+### 新增 — v1.7 长面板 DML（`src/statspai/dml/panel_dml.py`）
+
+- **`sp.dml_panel`** — 长面板双重/去偏机器学习（Double/Debiased ML；Semenova-Chernozhukov 
+  2023 简化版）。通过组内变换吸收个体（以及可选的时间）固定效应，使用按**个体
+  划分**的折交叉拟合 ML 干扰项学习器（与 Liang-Zeger 兼容），并报告个体层面的
+  聚类稳健 SE。PLR 矩条件适用于连续或二元处理变量；无协变量时回退为纯 FE-OLS。
+
+### 新增 — 分发器与注册表接线
+
+- `sp.mr(method=...)` 将 `mr_lap | lap | sample_overlap`、`mr_clust | clust | clustered`、
+  `grapple | profile_likelihood`、`mr_cml | cml | constrained_ml`、`mr_raps | raps | robust_profile_score` 
+  路由到新的估计量。
+- 所有六个新函数（5 个 MR + `dml_panel`）均已在 `registry.py` 中注册，包含完整
+  的 `ParamSpec` 元数据、类别、标签和参考文献。`sp.describe_function`、`sp.function_schema` 
+  和 `sp.agent_card` 均覆盖这些函数。
+
+### 新增 — 测试
+
+- `tests/test_mr_frontier.py` — 41 项测试，覆盖正确性、边界验证、跨方法一致性
+  （`mr_lap` 在 `overlap=0` 时等于 IVW；`mr_cml` 在 `K=0` 时约等于 IVW；`mr_clust` 
+  双聚类 DGP；`mr_raps` 相较 IVW 对离群值的稳健性）、分发器路由和注册表/模式
+  导出。
+- `tests/test_dml_panel.py` — 13 项测试，覆盖同质处理下的恢复、无混杂极限下与 
+  FE-OLS 的一致性、AR(1) 个体内相关下聚类 SE 与 iid SE 的比较、时间 FE 选项、
+  边界验证和注册表元数据。
+
+### 延后（最初计划纳入 v1.6）
+
+- **CAUSE**（Morrison 等人 2020）— R 参考实现中的完整变分贝叶斯实现约有 5000 LOC，
+  本周期内无法完成与参考实现的奇偶一致性验证。**已由 `mr_cml` 替代**（适用场景
+  相同：对相关和不相关多效性均稳健）。待参考实现奇偶校验基础设施就绪后，CAUSE
+  将在后续版本中发布。
+
+### 智能体原生基础设施（v1.6.0 的基础）
+
+现在各层都以结构化数据而非散文形式提供信息，并附带恢复提示；这是上述 P1 前沿估
+计量赖以构建的基础。
+
+### 新增 — 智能体原生异常分类体系（`statspai.exceptions`）
+
+- 根异常 `StatsPAIError` 及其子类 `AssumptionViolation` / `IdentificationFailure` 
+  / `DataInsufficient` / `ConvergenceFailure` / `NumericalInstability` / `MethodIncompatibility`，
+  每个异常都包含 `recovery_hint`、机器可读的 `diagnostics` 和按优先级排列的 `alternative_functions` 
+  列表。
+- 对应的警告类型：`StatsPAIWarning` / `ConvergenceWarning` / `AssumptionWarning`，
+  以及带有丰富载荷的 `sp.exceptions.warn()` 辅助函数。
+- 领域异常继承自 `ValueError` / `RuntimeError`，以向后兼容现有的 `except` 代码
+  块。估计量行为没有变化；现有 `ValueError`/`RuntimeError` 调用位置将逐步迁移。
+
+### 新增 — 智能体原生注册表模式
+
+- `FunctionSpec` 新增可选字段 `assumptions` / `pre_conditions` / `failure_modes` 
+  / `alternatives` / `typical_n_min`。
+- 新增 `FailureMode` 数据类：`(symptom, exception, remedy, alternative)`。
+- 新增公共访问器 `sp.agent_card(name)` 和 `sp.agent_cards(category=None)`，返
+  回包含 `function_schema()` 全部字段及智能体原生字段的超集。
+- 已填充旗舰系列：`sp.regress`、`sp.iv`、`sp.did`、 `sp.callaway_santanna`、`sp.rdrobust`、
+  `sp.synth`（此前仅自动注册）。
+
+### 新增 — 结果对象上的智能体原生方法
+
+- `CausalResult.violations()` 和 `EconometricResults.violations()` — 检查已存
+  储的诊断信息（前趋势 p 值、第一阶段 F、McCrary、 rhat/ESS/发散、重叠、SMD），
+  并返回带有 `severity` / `recovery_hint` / `alternatives` 的标记项。
+- `CausalResult.to_agent_summary()` 和 `EconometricResults.to_agent_summary()`
+  — 返回可直接用于 JSON 的结构化载荷，包含点估计、系数、标量诊断、违规项和后续
+  步骤。该方法与现有的 `summary()`（散文形式）和 `tidy()`（DataFrame）并列提供。
+
+### 新增 — 指南中的 `## For Agents` 部分
+
+- 通过 `sp.render_agent_block(name)` 和 `sp.render_agent_blocks(category=…, names=…)` 
+  根据注册表卡片自动渲染。
+- `scripts/sync_agent_blocks.py` 会在 `<!-- AGENT-BLOCK-START: <name> --> … <!-- AGENT-BLOCK-END -->` 
+  标记之间原位重新生成内容；检测到偏差时，`--check` 会以非零状态码退出（适用
+  于 CI）。
+- 目前已接入四篇旗舰指南： `choosing_did_estimator.qmd`（did + callaway_santanna）、 
+  `choosing_iv_estimator.qmd`（iv）、 `choosing_rd_estimator.qmd`（rdrobust）、 
+  `synth.qmd`（synth）。
+- 测试防护 `tests/test_agent_blocks_drift.py` 会在文档与注册表不同步时令 CI 失
+  败。
+
+### 测试 — 智能体原生基础设施
+
+- `tests/test_exceptions.py` — 异常层级、载荷、抛出/捕获、 `warn()` 辅助函数、
+  顶层导出。
+- `tests/test_agent_schema.py` — 模式机制、`agent_card` / `agent_cards` API、`FailureMode`、
+  旗舰函数填充的参数化测试。
+- `tests/test_agent_result_methods.py` — 两种结果类上的 `violations()` / `to_agent_summary()`、
+  JSON 往返转换。
+- `tests/test_agent_docs.py` — 渲染器输出、竖线转义、 空/非空情况。
+- `tests/test_agent_blocks_drift.py` — 用于检查文档/注册表同步的 CI 防护。
+
+### 新增 — 智能体原生后续冲刺
+
+- **再填充八张旗舰智能体卡片**：`sp.dml`、 `sp.causal_forest`, `sp.metalearner`
+  , `sp.match`, `sp.tmle`, `sp.bayes_dml`（扩展）、`sp.bayes_did`（新增手动注
+  册）、 `sp.bayes_iv`（新增手动注册）。每张卡都包含前置条件、 识别假设、3–4种
+  带恢复提示的失败模式、按优先级排序的替代方案， 以及典型的最小样本量经验规则。
+- **再增加七个指南 AGENT-BLOCK**（目前共 11 篇指南中的 13 个）： `choosing_matching_estimator.qmd`
+  （match 方法）， `callaway_santanna.qmd` / `cs_report.qmd` / `mixtape_ch09_did.qmd` 
+  （callaway_santanna 方法）、`honest_did.qmd` / `repeated_cross_sections.qmd` 
+  （did 方法）、`synth_experimental.qmd`（synth 方法）。
+- **`sp.recommend` 现在会使用智能体卡片**：每条建议都会合并注册表中的 `agent_card` 
+  / `pre_conditions` / `failure_modes` / `alternatives` / `typical_n_min` 字
+  段。当 `n_obs < typical_n_min` 时， 顶层 `warnings` 列表会添加专门的警告，并
+  指向 `sp.agent_card(name)`。 手工编写的 `assumptions` / `reason` / `code` 不
+  会被覆盖； 只有卡片中的非空字段才会填入空字段。
+- **首次将调用位置迁移到类型化分类体系**，并附加 `recovery_hint` + `diagnostics` 
+  + `alternative_functions`：
+  - `sp.did_2x2` 的处理变量/时间变量基数 → `MethodIncompatibility`
+  - `sp.did_analysis(method='cs'/'sa')` 缺少 `id` → `MethodIncompatibility`
+  - `sp.misclassified_did` 没有队列 / 没有从未处理组 → `DataInsufficient`
+  - IV 欠识别（全部 3 条 k-class 路径） → `MethodIncompatibility`
+  - IV 的 k-class 矩阵奇异 → `NumericalInstability`
+  - `sp.bayes_dml` 的 DML SE 非正 → `NumericalInstability`
+- **修复注册表中的潜在错误** — `_build_registry()` 使用 `if _REGISTRY: return`
+  作为幂等性门控条件；只要任一调用方先运行了 `register()`（例如测试夹具），手
+  写规范就会被悄然跳过。现已改用专门的 `_BASE_REGISTRY_BUILT` 标记，确保旗舰智
+  能体原生字段不受注册顺序影响。
+- **新增测试**：`tests/test_recommend_agent_cards.py`（5 项）、 `tests/test_exception_migrations.py`
+  （7 项）。所有现有的注册表 / 帮助 / DID / IV / synth / 匹配 / DML / 元学习器 
+  / Bayesian-DID / TMLE / 因果森林 / 智能体原生测试套件均继续通过。
+
+### 新增 — 智能体原生第 3 轮（v1.6 冲刺）
+
+- **再增加九张旗舰智能体卡片**：`sp.dml_panel`（v1.7 长面板 DML）、`sp.proximal`
+  （+ 开放双向/强化 PCI 替代方案）、 `sp.mr`（完整 MR 系列的分发器）、`sp.qdid`、 
+  `sp.qte`、`sp.dose_response`、`sp.spillover`、`sp.multi_treatment`、 `sp.network_exposure`。
+  `sp.agent_cards()` 现在返回**30 个已填充条目** （上一轮冲刺后为 19 个）。
+- **再增加 13 个指南 `## For Agents` 区块**（分布在 19 篇指南中的总数达到 26个）： 
+  `proximal_family.qmd`、`mendelian_family.qmd`、 `qte_family.qmd`（qte+ qdid）、
+  `interference_family.qmd`（spillover + network_exposure）、`harvest_did.qmd`
+  （did + callaway_santanna）、 `causal_text_family.qmd`（text_treatment_effect
+  + llm_annotator_correct）、`llm_dag_family.qmd`（llm_dag_constrained + llm_dag_validate）、
+  `paper_pipeline.qmd`（paper）。
+- **清理 `paper` 规范** — `alternatives` 条目现在使用纯函数名 （`"causal"`、`"recommend"`），
+  不再使用散文字符串， 因此渲染器输出 `sp.causal`，而不是 `sp.sp.causal: ...`。
+- **再将六个调用位置的异常迁移到新体系**，并添加恢复提示：
+  - `sp.match` 处理变量非二元 → `MethodIncompatibility` 指向 `sp.multi_treatment` 
+    / `sp.dose_response`
+  - `sp.match` 处理变量取值全部相同 → `DataInsufficient`
+  - `sp.ebalance` 处理组或对照组少于 2 个 → `DataInsufficient`
+  - `sp.dml(model='irm')` 中 D 非二元 → `MethodIncompatibility`
+  - `sp.dml(model='irm')` 中 D 为常量 → `IdentificationFailure`
+  - `sp.conformal_synth` / `sp.augsynth` 前/后期数不足 → `DataInsufficient`
+- **`tests/test_exception_migrations.py` 新增 6 项迁移测试**（目前共 13 项）。
+  所有现有 DID / IV / 匹配 / DML / 元学习器 / TMLE / synth / 贝叶斯方法系列测
+  试套件（共 363 项测试）均继续通过。
+
+### 新增 — 智能体原生第 4 轮（v1.6 闭环）
+
+- **再增加七张旗舰智能体卡片**：`sp.principal_strat` （扩展）、`sp.mediate`、`sp.bartik`、
+  `sp.bayes_rd`、 `sp.bayes_fuzzy_rd`、`sp.bayes_mte`、`sp.conformal`（扩展）。 
+  `sp.agent_cards()` 现在返回**36 个已填充条目** （从 30 增至 36）。
+- **再增加两个指南 `## For Agents` 区块**（分布在 21 篇指南中的总数达到 28 个）： 
+  `conformal_family.qmd`（conformal）、 `shift_share_political_panel.qmd`（bartik）。
+  偏差检查通过。
+- **再迁移六个异常**，并添加恢复提示：
+  - `sp.gsynth` 前期少于 3 期 → `DataInsufficient`，指向 `sp.synth` / `sp.did`
+  - `sp.gsynth` 后期少于 1 期 → `DataInsufficient`
+  - `sp.sbw` 处理变量非二元 → `MethodIncompatibility`， 指向 `sp.multi_treatment` 
+    / `sp.dose_response`
+  - `sp.optimal_match` 缺少对照组 → `DataInsufficient`
+  - `sp.synth_survival` 没有供体 → `DataInsufficient`
+- **闭环 `sp.diagnose_result`**：诊断组合输出现在还包含：
+  - `violations` — `result.violations()` 的结构化输出 （已显示前趋势 / 第一阶
+    段 F / McCrary / rhat / ESS / 发散 / 重叠 / SMD，以及严重性 + 恢复提示），
+  - `next_steps` — 以下调用的输出： `result.next_steps(print_result=False)`.打
+    印结果会在系列诊断组合下方新增 "Structured violations (agent-native)" 部分，
+    使人和智能体能看到相同的分诊信息。向后兼容：现有的 `method_type` / `checks` 
+    键保持不变。
+- `tests/test_exception_migrations.py` 和 `tests/test_diagnose_result_closed_loop.py` 
+  新增 **3 项迁移测试**和**8 项闭环测试**。
+- **自审修复**：`rdrobust` 卡片的替代方案列表曾使用 `rd_donut`（未作为顶层函数
+  公开）；现已替换为 `rdrbounds`。文档区块已重新同步；偏差检查通过。
+
+### 最终统计（合并第 1–4 轮）
+
+- **36 张已填充的智能体卡片**，覆盖：回归 / IV / DID / RD / synth / 匹配 / DML/ 
+  元学习器 / TMLE / 贝叶斯方法 (DID/IV/DML/RD/fuzzy-RD/MTE) / 近端方法 / MR/ 
+  主层分层 / 中介分析 / Bartik / QTE / QDID / 剂量-反应 / 溢出效应 / 多重处理 
+  / 网络暴露 / 保形推断 / 面板 DML / 论文 / 因果文本 / LLM-DAG。
+- **21 篇指南中的 28 个 `## For Agents` 区块**，由 `python scripts/sync_agent_blocks.py` 
+  渲染，并由 CI 偏差防护检查。
+- **19 个调用位置的异常**迁移到类型化分类体系 （`MethodIncompatibility`、`DataInsufficient`、 
+  `IdentificationFailure`、`NumericalInstability`），涉及 DID / IV / DML /匹
+  配 / synth / 贝叶斯方法。这些异常仍继承自 `ValueError` / `RuntimeError`，因
+  此现有 `except` 代码块无需修改即可工作。
+- **闭环 `sp.diagnose_result`** 可在一次调用中贯通拟合 → 违规项 → next_steps，
+  将系列诊断组合与结构化智能体原生视图合并。
+
+### 迁移说明
+
+本版本仅包含增量变更。现有捕获 `ValueError` 的调用位置仍会捕获 `AssumptionViolation` 
+/ `DataInsufficient` / `MethodIncompatibility` / `IdentificationFailure`；捕
+获 `RuntimeError` 仍会捕获 `ConvergenceFailure` 和 `NumericalInstability`。StatsPAI
+中的新代码应优先使用具体子类，并附加 `recovery_hint`，使智能体无需解析错误字符
+串即可处理失败。
+
+## \[1.5.0\] — 2026-04-21 — 干扰 / 保形 / 孟德尔随机化系列整合
+
+小版本更新。对干扰、保形因果推断和孟德尔随机化系列进行了三项并行改进： 提供完
+整系列的文档指南、采用与 `sp.synth` / `sp.decompose` / `sp.dml` 相同模式的统一
+分发器，以及一次有针对性的正确性审计，发现并修复了两个会悄无声息地产生错误数值
+的问题。
+
+### 新增 — 三篇系列指南（干扰 / 保形 / MR）
+
+- `docs/guides/interference_family.qmd` — 完整介绍 `sp.spillover`、`sp.network_exposure`、
+  `sp.peer_effects`、 `sp.network_hte`、`sp.inward_outward_spillover`、 `sp.cluster_matched_pair`、
+  `sp.cluster_cross_interference`、 `sp.cluster_staggered_rollout`、`sp.dnc_gnn_did`。
+  提供涵盖部分干扰 / 网络 / 集群 RCT 设计的决策树，并列出每项干扰分析都应报告
+  的 5 项诊断（暴露平衡、`peer_effects` 的识别检查、`network_hte` 的重叠、分期
+  集群设计的平行趋势，以及对暴露函数的敏感性）。
+- `docs/guides/conformal_family.qmd` — 完整介绍 `sp.conformal_cate`、`sp.weighted_conformal_prediction`、 
+  `sp.conformal_counterfactual`、`sp.conformal_ite_interval`、 `sp.conformal_density_ite`、
+  `sp.conformal_ite_multidp`、 `sp.conformal_debiased_ml`、`sp.conformal_fair_ite`、 
+  `sp.conformal_continuous`、`sp.conformal_interference`。阐明边际覆盖率与条
+  件覆盖率的区别，并针对每种工具提供“何时使用”及如何解读不一致结果的指导。
+- `docs/guides/mendelian_family.qmd` — 完整介绍全部 17 个 MR 函数 （4 个点估计
+  量 + 6 项诊断 + 3 个多暴露扩展 + 工具变量强度 F + 2 个图）， 并围绕 IV1 / IV2/ 
+  IV3 假设层级组织内容。包含每项 MR 分析都应报告的 4 项合理性检查，以及一个完
+  整的 BMI → T2D 示例。
+
+每篇指南都已在 `mkdocs.yml` 的“指南”下添加链接，并可通过 `sp.search_functions()` 
+搜索到。
+
+### 新增 — 统一的系列分发器
+
+新增三个顶层分发器，模式与 `sp.synth` / `sp.decompose` / `sp.dml` 一致：
+
+- **`sp.mr(method=..., ...)`** — 17 个函数组成的孟德尔随机化系列的统一入口。支
+  持 `method ∈ {"ivw", "egger", "median", "penalized_median", "mode", "simple_mode", "all", "mvmr", "mediation", "bma",
+  "presso", "radial", "leave_one_out", "steiger", "heterogeneity", "pleiotropy_egger", "f_statistic", ...}` 
+  及其别名。kwargs 会传递给目标函数。 `sp.mr_available_methods()` 会列出所有
+  别名。
+
+- **`sp.conformal(kind=..., ...)`** — 10 个函数组成的保形因果推断系列的统一入
+  口。支持 `kind ∈ {"cate", "counterfactual", "ite", "weighted", "density", "multidp", "debiased", "fair", "continuous"
+  , "interference", ...}`. `sp.conformal_available_kinds()` 会列出所有别名。
+
+- **`sp.interference(design=..., ...)`** — 9 个函数组成的干扰 / 溢出效应系列的
+  统一入口。支持 `design ∈ {"partial", "network_exposure", "peer_effects", "network_hte", "inward_outward", "cluster_ma
+  tched_pair", "cluster_cross", "cluster_staggered", "dnc_gnn", ...}`. `sp.interference_available_designs()` 
+  会列出所有别名。
+
+三个分发器均使用手写模式注册，因此 `sp.describe_function("mr")` / `"conformal"` 
+/ `"interference"` 会返回便于智能体理解的描述。`tests/test_dispatchers_v150.py` 
+中的 30 项新增测试确保分发器调用路径与直接调用路径产生逐字节完全相同的结果。
+
+### ⚠️ 破坏性变更 — `sp.mr` 现在是函数，不再是模块别名
+
+在 v1.5.0 之前，`sp.mr` 引用 `statspai.mendelian` 子模块（`from . import mendelian as mr`），
+因此可以使用 `sp.mr.mr_ivw(...)`。v1.5.0 将其替换为新的**分发器函数** `sp.mr(method=..., ...)`。
+
+**迁移方式**：之前使用 `sp.mr.mr_ivw(bx, by, sx, sy)` 的代码应改用顶层函数 `sp.mr_ivw(bx, by, sx, sy)`
+（此前所有版本均已导出）， 或使用新的分发器 `sp.mr("ivw", beta_exposure=bx, ...)`。 
+对于需要在子模块级别进行自省的用户，仍可通过 `sp.mendelian` 访问该模块。
+
+更新后的引用：仓库内唯一使用旧写法 `sp.mr.mr_ivw` 的位置是 `tests/reference_parity/test_mr_parity.py`，
+现已迁移为顶层调用。 所有已经使用 `sp.mr_ivw` / `sp.mendelian_randomization` / 
+等形式的外部用户代码均可继续正常工作，无需修改。
+
+### 修复 — 悄无声息地产生错误数值（正确性审计）
+
+- **`sp.mr_egger` — 斜率推断使用了正态分布，而非 t(n−2)。** 配套函数 `sp.mr_pleiotropy_egger` 
+  正确地使用 `t(n−2)` 计算 Egger 截距 p 值， 但 `mr_egger` 本身对斜率 p 值和
+  斜率 CI 的临界值都使用了 `stats.norm.cdf`。当 `n_snps` 较小时，这会导致推断
+  过于乐观：例如， `n_snps = 5` 且 t 统计量为 1.5 时，基于正态分布的双侧 p 值
+  为 0.134， 而正确的、基于 t(3) 的 p 值为 0.231。 `mendelian_randomization(..., methods=["egger"])` 
+  通过内部调用继承了此错误。 修复后，p 值和 CI 临界值均改用 `t(n−2)`。回归防
+  护测试： `tests/test_correctness_v150.py::TestMREggerUsesTDistribution`。 当 
+  `n_snps ≥ 100` 时，数值变化可以忽略（p 值变化 \< 1e-3）。
+
+- **`sp.mr_presso` — MC p 值可能恰好等于 0。** 全局检验 p 值和逐 SNP 离群值 p
+  值都采用了原始的 `mean(null >= obs)` 形式；当观测统计量超过所有模拟空值时，
+  该形式会得到 `0.0`。基于 MC 估计的 p 值不可能为零，其真实下界为 `1 / (B + 1)`。
+  修复后改用标准的 `(k + 1) / (B + 1)` 约定 （与 R 的 `MR-PRESSO` 包一致）。因
+  此，报告的 p 值始终严格大于零，且位于 `[1/(B+1), 1]`，避免对数变换和敏感性分
+  析悄然产生 `-inf`。 回归防护测试：`tests/test_correctness_v150.py::TestMRPressoMCPvalueConvention`。
+
+### 修复 — 死代码
+
+- **`sp.network_exposure._ht_estimate`** 中有一个量纲不一致的 `var = ...` 表达
+  式，随后立即被更保守的 Aronow-Samii 定理 1 上界 `var_as = ...` 覆盖。现已删
+  除该无效代码行；报告的 SE 不变。
+
+### 修复 — 注册表覆盖范围
+
+此前已公开但未注册的 5 个系列函数现在会显示在 `sp.list_functions()` 中，并可通
+过 `sp.describe_function()` 获取便于智能体理解的模式：
+
+- `sp.network_exposure`（Aronow-Samii HT）
+- `sp.peer_effects`（Bramoullé-Djebbari-Fortin 2SLS）
+- `sp.weighted_conformal_prediction`（TBCR 2019 基础函数）
+- `sp.conformal_counterfactual`（Lei-Candès 定理 1）
+- `sp.conformal_ite_interval`（Lei-Candès 式 3.4 嵌套界）
+
+### 其他 API 均无变化
+
+其他所有公共签名与 v1.4.2 逐字节完全相同。 现有用户代码仍可正常运行；升级后，
+在 `n_snps` 较小时 Egger CI 会略宽，且 `mr_presso` p 值将严格为正。
+
+## \[1.4.2\] — 2026-04-21 — 正确性修复 + 方法族指南
+
+补丁版本。没有破坏性变更；修复了 `dml_model_averaging` 和 `gardner_did` 中两个
+会静默产生错误数值的缺陷，并新增三个方法族指南（Proximal / QTE / Causal RL），
+填补 v3 参考文档与现有文档之间的最后几处空缺。
+
+### 已修复 — 静默产生错误数值的问题
+
+- **`sp.dml_model_averaging` — √n SE 缩放错误。**跨候选模型方差聚合器将样本均
+  值影响函数的外积直接当作 `Var(θ̂_avg)`，遗漏了最后的 `/ n`。结果是报告的 SE
+  被放大 `√n` 倍；在标准 n=400 DGP 中，95% CI 宽度为 4.20（名义值约为 0.21），
+  经验覆盖率为 100%（名义值为 95%）。修复后，CI 宽度为 0.21，覆盖率为 82%（接
+  近名义值；剩余差距由点估计 4% 的小样本偏差解释，这是干扰项调优问题，而非方差
+  公式问题）。已在 `tests/test_dml_model_averaging.py::test_se_on_correct_scale` 
+  中添加回归保护测试。
+- **`sp.gardner_did` — 事件研究参照类别污染。**Stage-2 虚拟变量回归将从未处理
+  的单位以及超出事件研究范围的已处理单位合并为同一个基准组，使每个事件时间系数
+  都向该组均值偏移。在真实 τ=2 且严格满足平行趋势的合成面板中，处理前趋势约为-
+  0.30（应为 0），处理后约为 +1.72（应为 2.0）。已将事件研究模式下的 Stage-2回
+  归替换为 Borusyak-Jaravel-Spiess 风格的组别 × 相对时间内插补差值直接平均。修
+  复后：处理前趋势约为 +0.01，处理后约为 +2.02。非事件研究路径（单一 ATT）原本
+  正确，保持不变。
+
+### 新增 — 方法族指南
+
+- `docs/guides/proximal_family.qmd` — Proximal Causal Inference 方法族完整指南：
+  `sp.proximal`, `sp.fortified_pci`, `sp.bidirectional_pci`, `sp.pci_mtp`, `sp.double_negative_control`
+  , `sp.proximal_surrogate_index`, `sp.select_pci_proxies`。包含决策树（“有 1
+  个 Z + 1 个 W / 桥接估计对模型设定敏感 / 不确定哪个是 Z、哪个是 W / 连续处理
+  + 位移政策 / 只有负向对照 / 希望从短期实验推断长期结果 / 有候选代理变量”），
+  以及每项 PCI 分析都应报告的四项诊断。
+- `docs/guides/qte_family.qmd` — 三种粒度层级（均值 → 分位数 → 整个分布），提
+  供横截面 / DiD / IV / 多控制变量面板的决策路径，涵盖 `sp.qte`, `sp.qdid`, `sp.cic`
+  , `sp.distributional_te`, `sp.dist_iv`, `sp.kan_dlate`, `sp.beyond_average_late` 
+  和 `sp.qte_hd_panel`。
+- `docs/guides/causal_rl_family.qmd` — 何时使用因果 RL，何时使用传统因果推断，
+  涵盖 `sp.causal_bandit`, `sp.causal_dqn`, `sp.offline_safe_policy`, `sp.counterfactual_policy_optimization`
+  , `sp.structural_mdp`, `sp.causal_rl_benchmark`。附带 4 项因果 RL 专属健全性
+  检查。
+
+每份指南都已在 `mkdocs.yml` 的 Guides 下添加链接，并可通过 `sp.search_functions()` 
+查找，因为所有引用的函数均有手写注册规格。
+
+### 新增 — 测试与文档入口（来自 v1.4.1 的挑拣提交现已正式发布）
+
+- `tests/test_bridge_full.py`：为六个 `sp.bridge(kind=...)` 桥接定理提供 10 项
+  端到端冒烟与正确性测试，检查分派、有限输出，以及在模型设定正确的 DGP 上的结
+  果一致性。
+- `docs/guides/bridging_theorems.qmd`：六种桥接方法的完整指南，说明适用场景以
+  及如何解读不一致结果。
+
+### API 无变更
+
+所有公开签名均与 v1.4.1 逐字节完全相同。现有用户代码继续正常运行；升级后，`dml_model_averaging` 
+的 CI 更窄，`gardner_did` 的事件研究系数更准确。
+
+## \[1.4.1\] — 2026-04-21 — v3 前沿冲刺 3（AKM SE + Claude 思考模式 + 对齐测试套件 + 文档）
+
+v1.4.0 的增量后续版本。所有 v1.4.0 API 保持稳定；新功能通过现有入口新增的 kwargs
+提供。
+
+### 新增 — 面板 shift-share 的冲击聚类 SE
+
+- **`sp.shift_share_political_panel(..., cluster='shock')`** — 新选项用于计算 
+  Park-Xu (2026) §4.2 推荐的面板扩展版 Adão-Kolesár-Morales (2019) 方差估计量：
+
+  ``` text
+  u_k = Σ_{i, t} s_{ikt} · Z̃_{it} · ε̂_{it}
+  Var(β̂) = Σ_k u_k² / (D̂'_fit · D̃)²
+  ```
+
+  在包含 10–100 个行业的场景中，SE 通常比按单位聚类的 SE 小约 3 倍。 `diagnostics['akm_se']` 
+  会与所选聚类类型一同提供该值；`diagnostics['cluster']` 现在是便于阅读的标签
+  （启用冲击估计量时为 `"shock (AKM 2019)"`）。 \[`bartik/political.py`\]
+
+### 新增 — Causal MAS 的 Claude 扩展思考支持
+
+- **`sp.causal_llm.anthropic_client(..., thinking_budget=N)`** — 可选择启用 Claude 
+  4.5 / Opus 4.7 的**扩展思考** API。为便于审计，推理轨迹会记录在 `client.history[-1]['thinking']` 
+  中，但不会纳入 `causal_mas` 解析的公开回答。 兼容 Anthropic 的 `thinking`/ 
+  `redacted_thinking` 内容块，并能妥善处理两者。 会预先校验 `thinking_budget >= 1024` 
+  且 `< max_tokens`，因此配置错误会在首次 API 调用前明确报出。 \[`causal_llm/llm_clients.py`
+  \]
+
+### 新增 — 对齐测试与集成测试套件
+
+- **`tests/reference_parity/test_assimilation_parity.py`** — 针对 Kalman / 粒
+  子后端的 10 项检查：
+  - 静态效应后验恢复（两个后端）
+  - 三个随机种子下 Kalman 与粒子滤波结果一致（点估计 + SD 相差不超过 15%）
+  - `process_var = 0` 时后验方差单调变化
+  - 粒子滤波重采样后 ESS 保持高于阈值
+  - 在受污染数据流上，Student-t 粒子滤波优于 Kalman
+  - 跟踪漂移时方差不会失控增大
+  - `assimilative_causal(backend=...)` 与直接调用后端的结果一致
+- **`tests/integration/test_causal_mas_with_fake_llm.py`** — 11 项端到端集成测
+  试， 使用确定性的 `echo_client` 驱动 proposer / critic / domain-expert / synthesiser
+  循环：解析 proposer 输出（换行 + 项目符号）、critic 拒绝、 domain-expert 背
+  书提升置信度、对话记录可审计性、置信度随轮数变化、 角色覆盖、通过 `sp.dag(...)` 
+  与 DAG 互操作；另有 3 项 Claude 思考内容块拆分器测试，通过模拟 Anthropic响
+  应，无需在测试时安装 `anthropic` SDK。
+
+### 文档
+
+新增两份 MkDocs 指南，已接入 `mkdocs.yml` 中 *DID & Panel Methods* / guides 导
+航：
+
+- `docs/guides/shift_share_political_panel.qmd` — 完整的面板 IV 配方，包含 AKM
+  冲击聚类指导和处理前趋势工作流。
+- `docs/guides/causal_mas.qmd` — 多智能体 LLM 因果发现、真实 SDK 集成、 Claude
+  思考模式指南，以及接入 `sp.dag` / `sp.identify` 的端到端流程。
+
+### 已修复
+
+- 集成测试使用了 `dag.edges()`，但 `DAG.edges` 是元组列表**属性** （而非方法）。
+  已更正为 `dag.edges`。
+
+### 向后兼容性
+
+- 所有 v1.4.0 API 均保持稳定。唯一新增的接口是以下 kwargs：
+  - `sp.shift_share_political_panel(cluster='shock')`
+  - `sp.causal_llm.anthropic_client(thinking_budget=N)`
+
+## \[1.4.0\] — 2026-04-21 — v3 前沿冲刺 2（扩展 + LLM SDK + 文档）
+
+v1.3.0 的后续版本，完成冲刺 1 末尾标记的四项次要工作。
+
+### 新增 — 面板 shift-share 扩展
+
+- **`sp.shift_share_political_panel`** — 根据 Park & Xu (2026) §4.2 对 `sp.shift_share_political` 
+  进行多期扩展。支持随时间变化的份额**和** 随时间变化的冲击，使用单位 / 时间/ 
+  双向固定效应运行合并 2SLS， 并报告逐期事件研究表及汇总 Rotemberg top-K 权重。
+  在 30 × 4 合成面板上， 估计值恢复至 τ = 0.30，误差不超过 0.003。 \[`bartik/political.py`
+  \]
+
+### 新增 — Causal MAS 的真实 LLM 适配器
+
+- **`sp.causal_llm.openai_client`** — 基于 `openai>=1.0` Python SDK 的适配器；
+  支持为 Azure / vLLM / Ollama 指定自定义 `base_url`。
+- **`sp.causal_llm.anthropic_client`** — 基于 `anthropic>=0.30` Messages API的
+  适配器；默认使用 `claude-opus-4-7`。
+- **`sp.causal_llm.echo_client`** — 用于离线单元测试的确定性脚本响应客户端。
+- 三者均实现单方法 `LLMClient` 协议，并通过现有的 `chat(role, prompt)` 接口与 
+  `sp.causal_llm.causal_mas(client=...)` 集成。SDK 采用延迟导入，因此核心包没
+  有新增运行时依赖。 \[`causal_llm/llm_clients.py`\]
+
+### 新增 — 粒子滤波数据同化后端
+
+- **`sp.assimilation.particle_filter`** — 采用系统重采样的 bootstrap-SIR 粒子
+  滤波器（Gordon-Salmond-Smith 1993；Douc-Cappé 2005）。通过可插拔的 `prior_sampler` 
+  / `transition_sampler` / `observation_log_pdf` 回调支持非高斯先验、重尾观测
+  噪声和非线性动态。在高斯 DGP 下，与精确 Kalman 滤波器结果相差约 0.003。
+- **`sp.assimilative_causal(..., backend='particle')`** — 当 `backend='particle'` 
+  时，端到端封装器会改用粒子滤波器。 \[`assimilation/particle.py`\]
+
+### 文档
+
+新增三份介绍 v3 前沿估计量的 MkDocs 指南：
+
+- `docs/guides/synth_experimental.qmd` — Abadie-Zhao 逆向 SC 工作流。
+- `docs/guides/harvest_did.qmd` — Borusyak-Hull-Jaravel 收获式 DID。
+- `docs/guides/assimilative_ci.qmd` — Nature Comms 2026 流式 CI，涵盖 Kalman和
+  粒子两种后端。
+
+三份指南均已接入 `mkdocs.yml` 中 *DID & Panel Methods* / guides 部分的导航。
+
+### 注册表 + 智能体 schema
+
+- 新增 5 个手写的 `FunctionSpec` 条目： `shift_share_political_panel`, `particle_filter`
+  , `openai_client`, `anthropic_client`, `echo_client`.
+
+### 代码质量检查（冲刺 1 审计）
+
+- 使用 `pyflakes` 在冲刺 1 模块中识别并移除了 20 个未使用的导入项 / 遮蔽变量（`did/harvest.py`
+  , `bcf/ordinal.py`, `bcf/factor_exposure.py`, `causal_llm/causal_mas.py`, `bartik/political.py`
+  , `assimilation/kalman.py`, `target_trial/report.py`).
+
+### 已修复
+
+- `tests/external_parity/test_causalml_book.py::test_forest_ate_recovers_average_tau` 
+  在 `ubuntu-latest + Python 3.10` 上偶发失败，因为只为数据生成 RNG 设置了随
+  机种子， 因果森林的 bootstrap + honest-split 抽样却没有设置种子，导致不同操
+  作系统 / Python 矩阵条目间的 ATE 估计相差 ±0.3，`|ATE - 0.5| < 0.3` 容差偶尔
+  无法满足。 现已通过传入 `random_state=0`、`n_estimators=300`，并将 `n` 增至 
+  1 500 修复， 使测试在整个矩阵中完全确定。
+
+## \[1.3.0\] — 2026-04-21 — v3 前沿冲刺（知识地图 v3 路线图的冲刺 1）
+
+在 v1.2.0 文档对齐工作的基础上，实现 2026-04-20 *Causal-Inference Method Family
+万字剖析 v3* 差距分析中确定的 11 个最具价值的前沿方法。所有新增公开函数均接入
+注册表和智能体 schema，使 LLM 智能体可通过 `sp.list_functions`、`sp.describe_function` 
+和 `sp.all_schemas` 使用这些函数。
+
+### 新增 — P0 前沿方法（4 个方法，冲刺第 1 周内）
+
+- **`sp.synth_experimental_design`** — Abadie & Zhao (2025/2026) 逆向合成控制：
+  通过最小化各单位处理前 SC MSPE 之和，选出最适合接受处理的 `k` 个候选单位。生
+  成排序表、推荐处理分配方案，以及与随机分配相比的方差增益基准。 \[`synth/experimental_design.py`
+  \]
+
+- **`sp.rdrobust(..., bootstrap='rbc', n_boot=999, random_state=...)`** — Cavaliere
+  , Gonçalves, Nielsen & Zanelli (arXiv:2512.00566, 2025) 的稳健偏差校正 studentised
+  百分位 bootstrap。实测 CI 比解析稳健 CI 短约 3–15%，且不损失覆盖率。新增的 `model_info['rbc_bootstrap']` 
+  区块提供 CI、p 值、长度比和有效重复次数。
+
+- **`sp.fairness.evidence_without_injustice`** — Loi, Di Bello & Cangiotti (arXiv
+  :2510.12822, 2025) 提出的反事实公平性检验：将可采证据特征固定为事实值， 并检
+  验在 `do(A = a')` 下预测是否仍会变化。返回 bootstrap CI、p 值以及逐个替代值
+  的细分结果。 \[`fairness/evidence_test.py`\]
+
+- **`sp.target_trial.to_paper(..., fmt='jama' | 'bmj')`** — 生成可供 JAMA / BMJ
+  使用的稿件；可推导的 TARGET Statement（JAMA/BMJ 2025-09）21 项内容会自动填写，
+  其余位置则使用 `(supply text)` 占位符。支持 `authors`、`funding`、 `registration`、
+  `data_availability`、`background`、`limitations` 关键字参数。
+
+### 新增 — P1 前沿方法（4 个方法，冲刺第 2 周内）
+
+- **`sp.harvest_did`** — Abadie, Angrist, Frandsen & Pischke, NBER WP 34550 (2025
+  ) 提出的 Harvesting DID + 事件研究框架：从错位处理面板中提取所有有效的 2×2 DID
+  比较，使用逆方差权重进行合并，并报告事件研究和处理前趋势 Wald 检验。 使用 not-yet-treated-at-max
+  (t₁, t₂) 清洁对照组筛选器，正确处理安慰剂时距。 \[`did/harvest.py`\]
+
+- **`sp.bcf_ordinal`** — Zorzetto et al. (2026) 针对有序 / 剂量处理的 BCF。 将
+  相邻水平间的成对二元 BCF 串联起来，得到累积剂量-反应 CATE 及各水平的 ATE。 \
+  [`bcf/ordinal.py`\]
+
+- **`sp.bcf_factor_exposure`** — arXiv:2601.16595 (2026) 提出的高维暴露向量 PCA
+  因子得分 BCF。通过 SVD 或用户提供的载荷将暴露压缩为 `K` 个因子； 每个因子分
+  别拟合一个 BCF。返回各因子的 ATE、载荷、得分以及带 CI 的混合汇总 ATE。 \[`bcf/factor_exposure.py`
+  \]
+
+- **`sp.causal_llm.causal_mas`** — arXiv:2509.00987 (2025/09) 提出的多智能体因
+  果发现框架。proposer / critic / domain-expert / synthesiser 智能体经过多轮讨
+  论， 提供逐边置信度分数和完整的可审计记录。默认使用离线启发式后端；接受任意 
+  `chat(role, prompt)` / `complete(prompt)` LLM 客户端。 \[`causal_llm/causal_mas.py`
+  \]
+
+- **`sp.shift_share_political`** — Park & Xu (arXiv:2603.00135, 2026) 提出的 Bartik 
+  IV 政治科学变体。采用长差分 2SLS，提供 AKM 冲击聚类 SE、 Rotemberg top-K 诊
+  断，以及针对处理前协变量的份额平衡 F 检验。 \[`bartik/political.py`\]
+
+### 新增 — P2 前沿方法 + 测试（2 个方法 + 2 个测试套件）
+
+- **`sp.assimilation.causal_kalman`**, **`sp.assimilation.assimilative_causal`
+  ** — *Assimilative Causal Inference* (Nature Communications 2026)：对流式因
+  果效应估计进行 Kalman 滤波。生成带有效样本量诊断的连续后验，支持可插拔动态模
+  型 （静态或随机游走），并提供运行用户指定逐批估计器的端到端封装器。新增子包 
+  \[`assimilation/`\].
+
+- **`tests/reference_parity/test_mr_parity.py`** — 对 MR 套件进行 7 项解析真值
+  检查 （IVW 一致性、平衡多效性下的 Egger 截距、Egger 定向多效性检测、加权中位
+  数稳健性、PRESSO 离群值标记、LOO 稳定性、Radial-Wald 精确一致性）。7 项均通
+  过。
+
+- **`tests/external_parity/test_causalml_book.py`** — 7 项 CausalMLBook (Chernozhukov 
+  et al. 2024–2025) 标准 DGP 检查：DML-PLR、Causal Forest、 T-learner、2SLS、
+  Callaway–Sant'Anna DID、rdrobust，以及 rbc-bootstrap 与解析方法的对齐比较。7 
+  项均通过。
+
+### 注册表 + 智能体 schema
+
+- 为所有新增公开函数编写了 9 个手写 `FunctionSpec` 条目： `synth_experimental_design`
+  , `evidence_without_injustice`, `harvest_did`, `bcf_ordinal`, `bcf_factor_exposure`
+  , `causal_mas`, `shift_share_political`, `causal_kalman`, `assimilative_causal`
+  . 每项均附带 NumPy 风格的参数文档、示例、标签和论文参考资料，供 LLM 智能体使
+  用。
+
+### 向后兼容性
+
+- 所有 v1.2.x 公开 API 均保持稳定。现有签名的唯一变化是新增以下 kwargs：
+  - `sp.rdrobust` — `bootstrap`, `n_boot`, `random_state`
+  - `sp.target_trial.to_paper` — `journal`, `authors`, `funding`, `registration`
+    , `data_availability`, `background`, `limitations`
+
+## \[1.2.0\] — 2026-04-21 — 文档对齐冲刺（v3 参考文档）
+
+填补 *Causal-Inference Method Family 万字剖析 v3* (2026-04-20) 参考文档与 StatsPAI
+公开 API 之间的剩余差距。大多数 v3 前沿方法已在 v1.0.x 中实现， 但位于子包中，
+未在顶层公开，也没有经过整理的注册规格。本版本将这些方法接入， 新增 8 个确实缺
+失的经典 / 前沿方法，并将 14 个前沿估计量的注册规格从自动生成升级为手写，使 LLM
+智能体能够获取规范的参数文档、示例、参考资料和标签。
+
+### 新增 — 新估计量
+
+**错位处理 DID**
+
+- `sp.gardner_did` / `sp.did_2stage` — Gardner (2021) 两阶段 DID 估计量（Stata 
+  `did2s` 的对应方法）。Stage-1 在未处理行上拟合双向固定效应； Stage-2 使用聚
+  类稳健 SE，将残差化结果回归到处理虚拟变量上（估计总体 ATT 或事件研究）。在合
+  成错位处理面板上，与 `did_imputation` 的数值差异约在 2% 以内。
+
+**DML**
+
+- `sp.dml_model_averaging` / `sp.model_averaging_dml` — Ahrens, Hansen, Kurz,Schaffer 
+  & Wiemann (2025, *JAE* 40(3):381-402) 模型平均 DML-PLR。使用多个候选干扰项
+  学习器拟合 DML，并报告风险加权（或等权 / 单一最佳） 平均 θ 及经跨评分协方差
+  调整的 SE。默认候选集：Lasso / Ridge / RandomForest / GradientBoosting。
+
+**IV**
+
+- `sp.kernel_iv`（`sp.iv.kernel_iv` 的顶层别名）— Lob et al. (2025, arXiv:2511.21603
+  ) 提出的核 IV 回归，并通过 wild-bootstrap 为结构函数 `h*(d)` 构造一致置信带。
+- `sp.continuous_iv_late`（顶层别名）— Zeng et al. (2025, arXiv:2504.03063) 提
+  出的连续工具变量最大服从者类别 LATE，使用分位数组 Wald 估计量。（另修复了一
+  项 summary 格式错误，见下文。）
+
+**TMLE**
+
+- `sp.hal_tmle` + `sp.HALRegressor` / `sp.HALClassifier` — 使用 Highly Adaptive 
+  Lasso 干扰项学习器的 TMLE (Li, Qiu, Wang & van der Laan, 2025, arXiv:2506.17214
+  )。包含两个变体：`"delta"`（将 HAL 接入标准 TMLE）和 `"projection"`（对 targeting 
+  epsilon 应用切空间收缩）。在 n=400 且干扰项丰富时，ATE 恢复误差约在 3% 以内。
+
+**合成控制**
+
+- `sp.synth_survival` — 合成生存控制 (Han & Shah, 2025, arXiv:2511.14133)。在 
+  complementary log-log 尺度上，通过供体凸组合匹配处理组处理前的 Kaplan-Meier
+  曲线，再向前推演，并使用安慰剂置换一致置信带报告生存差异。在合成 Cox 数据上，
+  处理前拟合 RMSE 通常 \< 0.01。
+
+**RDD 别名**
+
+- `sp.multi_cutoff_rd`（`sp.rdmc` 的别名）、`sp.geographic_rd` （`sp.rdms` 的
+  别名）、`sp.boundary_rd`（`sp.rd2d` 的别名）、 `sp.multi_score_rd`（`sp.rd_multi_score` 
+  的别名）——均为与 v3 文档术语一致、 便于用户使用的别名。
+
+### 新增 — 注册表 / 智能体接口
+
+- 14 个前沿估计量的注册规格从自动生成升级为**手写**，并整理参数说明、示例、 标
+  签和参考资料：`gardner_did`, `dml_model_averaging`, `kernel_iv`, `continuous_iv_late`
+  , `hal_tmle`, `synth_survival`, `bridge`, `causal_dqn`, `fortified_pci`, `bidirectional_pci`
+  , `pci_mtp`, `cluster_cross_interference`, `beyond_average_late`, `conformal_fair_ite`。
+  现在，`sp.describe_function(...)` 和 `sp.function_schema(...)` 会针对这些名
+  称返回上述规格。
+- 注册函数总数：**836 → 860**。
+- 修复 `__all__`，使先前已导入但未导出的符号能够出现在 `sp.list_functions()`中： 
+  `fci` / `FCIResult`、`spatial_did` / `SpatialDiDResult`, `spatial_iv`, `notears`
+  , `pc_algorithm`.
+
+### 已修复
+
+- `iv.continuous_late.ContinuousLATEResult.summary` — 标题行因隐式字符串拼接与 
+  `"=" * 42` 的优先级错误而重复 42 次 （`"title\n" "=" * 42` 被解析为 `("title\n" + "=") * 42`）。 
+  已改为显式 f-string 拼接。
+- `question.CausalQuestion.save` — 添加了 `pathlib.Path` 的 `TYPE_CHECKING` 导
+  入， 因此字符串化的返回注解不再导致 CI 中的 `flake8 F821` 错误。
+- 将 `tabulate>=0.9.0` 添加到核心依赖。`pandas.to_markdown()` 会调用 `tabulate`；
+  此前它是 pandas 的可选依赖。对于没有通过传递依赖安装 `tabulate` 的系统（Windows、
+  新建环境），用户调用 `sp.causal(...).report('markdown' | 'html')` 会触发 `ImportError`。
+
+### 测试覆盖
+
+在 7 个新测试模块中新增 35 个测试用例： `test_gardner_2s.py` (7), `test_dml_model_averaging.py` 
+(5), `test_kernel_iv.py` (5), `test_continuous_iv_late.py` (4), `test_hal_tmle.py` 
+(5), `test_synth_survival.py` (6), `test_rd_aliases.py` (3)。在 Python 3.13上
+全部通过。
+
+## \[1.0.1\] - 2026-04-21 — 审查后正确性修复 + 延期事项收尾
+
+缺陷修复版本，解决了独立代码审查专家对 v1.0.0 前沿模块审查中发现的所有严重 /高 
+/ 中等级问题，并处理 v1.0.0 中延期的两个 `# NEEDS_VERIFICATION` 事项。
+
+### 已修复 — 审查后的正确性修复
+
+**严重（静默产生错误数值）**
+
+- `pcmci.partial_corr_pvalue`：Fisher-z SE 现在使用有效样本量 `sqrt(n - |Z| - 3)`，
+  而非存在差一错误的 `sqrt(df - 1)`。先前公式会使偏相关 p 值系统性偏大，从而漏
+  检 PCMCI 中的边。
+- `cohort_anchored_event_study`：`cluster` 参数曾被静默丢弃——bootstrap 重采样
+  的是队列 ATT，而不是用户指定的聚类层级。现已改为按所请求的聚类进行重采样，并
+  在每次抽样中重新计算 ATT(c, k)。
+- `ltmle_survival` 的 targeting 步骤：TMLE 单步更新直接使用了 `logit(h_hat_regime)`，
+  而非预先计算的 `offset` 变量，导致方案反事实风险未经过 targeting。已重新绑定 
+  `offset_regime = logit(clip(h_hat_regime))`。
+
+**高（公式错误 / 静默同义反复）**
+
+- `conformal_density_ite`：此前回退为基于高斯残差分位数的 split-conformal 估计，
+  KDE 带宽虽已计算却未使用。现在会为 ITE 残差卷积构造适当的 KDE，并通过对平滑
+  样本排序后扫描最短窗口，返回 Hyndman (1996) 最高密度区域。
+- `bridge.ewm_cate`：路径 A 和路径 B 使用相同的 CATE 插件式 DR 评分，因此一致
+  性检验变成了同义反复。Path A 现在使用 Kitagawa-Tetenov (2018) 纯 IPW 福利评
+  分，使两条路径确实具有不同的失效模式，从而形成真正的桥接。
+- `mr_multivariable` 的条件 F 统计量 (Sanderson-Windmeijer)：划分 `ss_full - ss_resid` 
+  使用了原始（未中心化）平方和及无权重 OLS。 已替换为基于 WLS 残差的中心化平
+  方和，以匹配 MVMR 加权方案。
+- `bcf_longitudinal.average_ate`：点估计和 CI 基于不同的抽样分布计算 （逐时间
+  点均值与 bootstrap 分位数）。核心结果现在使用 bootstrap 均值。
+
+**中等**
+
+- `conformal_fair_ite`：小型保护组的回退策略不再混合不同处理组（这会破坏组内覆
+  盖率）。 现在回退到覆盖充分组之间较保守的 MAX 组内分位数；若所有组都很小，则
+  回退到合并分位数并明确发出警告。
+- `causal_rl.structural_mdp`：`A` / `B` 矩阵切片已通过数值验证，确认正确；同时
+  添加形状断言，确保未来若重构导致切片语义颠倒时会明确报错。
+- `causal_llm.llm_dag_propose`：用户提供的 `domain` 和 `variables` 在插入 LLM
+  提示词前会先进行清理（移除不可打印字符和换行符，并限制长度）， 从而封堵提示
+  词注入途径。
+
+**无用变量清理**
+
+- 从 `mendelian/multivariable.py`、`did/design_robust.py`、 `bcf/longitudinal.py` 
+  和 `qte/hd_panel.py` 中移除了过时的 `bM`、`fe_cols`、 `avg`、`rng` 变量名。
+
+### 已变更 — 延期事项收尾
+
+- `beyond_average_late`：将临时的分位数范围重缩放替换为 Abadie (2002) κ 加权服
+  从者 CDF 构造，仅在服从者子总体上反演 CDF 差异。结果为规范的服从者分位数处理
+  效应。
+- `bridge.surrogate_pci`：路径 A（surrogate index）和路径 B（PCI 桥接）现在采
+  用真正不同的识别假设——path A 依赖替代性（给定 S 时不存在直接 D→Y 路径），路
+  径 B 依赖代理变量完备性（在桥接函数下，D 是自身的有效 IV）。 路径 B 原先基于
+  (D, S, X) 的 OLS 构造现已替换为 2SLS：将 S 和 X 用作外生控制变量，并保留 D作
+  为关注的处理变量。
+
+### 测试
+
+- `tests/test_v100_review_fixes.py`：添加了 8 个固定回归测试，与审查发现逐一对
+  应。
+- 全套回归测试：2 515+ 项通过，零回归。
+
+## \[1.0.0+\] - 2026-04-21 — v3 前沿全面梳理（12 个模块 / 38 个估计量）
+
+由 v3 全景图文档（2026-04-20）触发的收尾工作，填补 Stata / R / EconML / DoWhy/ 
+CausalML 尚未涵盖的 2025–2026 前沿方法空缺。在 12 个模块中新增 **38 个公开估
+计量**，均通过 `sp.*` 提供并注册到 `sp.list_functions()`。
+
+### 新增 — v3 前沿估计量
+
+- **DiD 前沿方法** (`sp.did_*`)：`did_bcf`（Forests for Differences， Wüthrich-Zhu 
+  2025）、`cohort_anchored_event_study` (arXiv 2509.01829)、 `design_robust_event_study` 
+  (arXiv 2601.18801)、 `did_misclassified` (arXiv 2507.20415)。
+- **Conformal 前沿方法** (`sp.conformal_*`)：`conformal_density_ite` (arXiv 2501.14933
+  )、`conformal_ite_multidp` (arXiv 2512.08828)、 `conformal_debiased_ml` (arXiv 
+  2604.03772)、 `conformal_fair_ite` (arXiv 2510.08724)。
+- **Proximal 前沿方法** (`sp.fortified_pci`, `sp.bidirectional_pci`, `sp.pci_mtp`
+  , `sp.select_pci_proxies`)：双重稳健、双向、修正处理策略方法， 以及启发式代
+  理变量选择器 (arXiv 2506.13152 / 2507.13965 / 2512.12038 / 2512.24413)。
+- **分布 / 面板 QTE** (`sp.dist_iv`, `sp.kan_dlate`, `sp.qte_hd_panel`, `sp.beyond_average_late`
+  )：完整分布层级 LATE + 高维面板 QTE + 服从者分布 LATE
+  (arXiv 2502.07641 / 2506.12765 / 2504.00785 / 2509.15594)。
+- **RDD 前沿方法** (`sp.rd_interference`, `sp.rd_multi_score`, `sp.rd_distribution`
+  , `sp.rd_bayes_hte`, `sp.rd_distributional_design`)：新增五项 2025–2026 方法 
+  (arXiv 2410.02727 / 2508.15692 / 2504.03992 / 2504.10652 / 2602.19290)。
+- **`sp.causal_llm`**（新命名空间）：`llm_dag_propose`, `llm_unobserved_confounders`、
+  `llm_sensitivity_priors` — 均提供确定性启发式后端 （无需 API key）；可通过 `client` 
+  参数接入真实 LLM。
+- **`sp.causal_rl`**（新命名空间）：`causal_dqn`（Li-Zhang-Bareinboim 抗混杂 Deep 
+  Q，arXiv 2510.21110）、`causal_rl_benchmark` （Cunha-Liu-French-Mian 提出的 
+  5 项基准，arXiv 2512.18135）、 `offline_safe_policy`（Chemingui et al., arXiv 
+  2510.22027）。
+- **Cluster RCT × 干扰效应** (`sp.cluster_*`, `sp.dnc_gnn_did`)： 配对、跨聚类、
+  错位推出、DNC+GNN+DiD (arXiv 2211.14903 / 2310.18836 / 2502.10939 / 2601.00603
+  )。
+- **IV 前沿方法** (`sp.iv.kernel_iv`, `sp.iv.continuous_iv_late`, `sp.iv.ivdml`
+  )：核 IV 一致 CI + 连续工具变量最大服从者 LATE + LASSO 高效工具变量 × DML (arXiv 
+  2511.21603 / 2504.03063 / 2503.03530)。
+- **Meta-learner 前沿方法** (`sp.focal_cate`, `sp.cluster_cate`)： 函数型 CATE 
+  (FOCaL, arXiv 2602.11118) + K-means 聚类 CATE (arXiv 2409.08773)。
+- **Bunching 统一方法** (`sp.general_bunching`, `sp.kink_unified`)： 高阶偏差
+  校正 (Song 2025, arXiv 2411.03625) + RDD/RKD/Bunching 联合估计量 (Lu-Wang-Xie 
+  2025)。
+
+### 测试（v3 全面梳理）
+
+- 在 `tests/test_*_frontiers.py`、 `tests/test_causal_llm.py`、`tests/test_causal_rl.py`、 
+  `tests/test_cluster_rct.py`、`tests/test_metalearner_frontiers.py`、 `tests/test_bunching_unified.py` 
+  下新增 55 项冒烟测试。全部通过；did / iv / rd / dml / proximal / metalearners
+  的 153 项核心测试无回归。
+
+### 注册表（v3 全面梳理）
+
+- 注册函数总数：**794 → 831**（新增 37 个符号 + 自动发现 1 个结果类）。
+- 全部 38 项均可通过 `sp.list_functions()`、`sp.help()`、 `sp.function_schema()` 
+  和兼容 OpenAI 的 JSON schema 导出接口访问。
+
+## \[1.0.0\] - 2026-04-21 — 研究前沿里程碑：桥接定理、公平性、替代指标、MVMR、PCMCI、超越平均 QTE
+
+StatsPAI 1.0 是里程碑版本，将三年的开发成果整合为一套完整工具包。在 v0.9.17 三
+校体系完善工作的基础上，v1.0 发布了 Stata / R 尚未跟进的 **2025–2026 研究前沿
+模块**，将所有已搭建的子包接入顶层 `sp.*` 命名空间， 并将目标试验报告层升级至 
+JAMA/BMJ 2025 TARGET Statement。
+
+### 新增 — v1.0 研究前沿模块
+
+**桥接定理 (`sp.bridge`)** — 双路径双重稳健识别。每条定理都将针对同一目标参数
+的两个表面上不同的估计量配对：只要任一假设成立，估计量即为一致。
+
+- `bridge(..., kind="did_sc")` — DiD ≡ 合成控制 (Shi-Athey 2025)
+- `bridge(..., kind="ewm_cate")` — EWM ≡ CATE → 政策 (Ferman et al. 2025)
+- `bridge(..., kind="cb_ipw")` — 协变量平衡 ≡ IPW × DR (Zhao-Percival 2025)
+- `bridge(..., kind="kink_rdd")` — Kink-bunching ≡ RDD (Lu-Wang-Xie 2025)
+- `bridge(..., kind="dr_calib")` — 通过校准实现 DR (Zhang 2025)
+- `bridge(..., kind="surrogate_pci")` — 长期替代指标 ≡ PCI (Kallus-Mao 2026)
+- `BridgeResult` 会报告两条路径的估计值、一致性检验以及推荐的双重稳健点估计。
+
+**公平性 (`sp.fairness`)** — 将反事实公平性视为因果推断问题，而非纯统计问题。
+
+- `counterfactual_fairness` — Kusner et al. (2018) 基于用户提供的 SCM 评估 Level-2/3 
+  预测器。
+- `orthogonal_to_bias` — Marchesin & Zhang (2025) 的残差化预处理，用于移除非保
+  护特征中与保护属性相关的部分。
+- `demographic_parity`、`equalized_odds`、`fairness_audit` — 统计公平性指标 +
+  一站式仪表板。
+
+**长期替代指标 (`sp.surrogate`)** — 将短期实验结果外推至长期结果。
+
+- `surrogate_index` — Athey, Chetty, Imbens, Pollmann & Taubinsky (2019).
+- `long_term_from_short` — Ghassami, Yang, Shpitser, Tchetgen Tchetgen (2024).
+- `proximal_surrogate_index` — Imbens, Kallus, Mao (2026)：当未观测混杂因素关
+  联替代指标与长期结果时进行近端识别。
+
+**多变量 MR（扩展 `sp.mendelian`）**
+
+- `mr_multivariable` — 针对多个相关暴露变量的 MVMR。
+- `mr_mediation` — 双样本 MR 的因果路径分解。
+- `mr_bma` — 对含有多个候选暴露变量的 MR 进行贝叶斯模型平均 (Yao et al. 2026路
+  线图)。
+
+**DiD 前沿方法（扩展 `sp.did`）**
+
+- `cohort_anchored_event_study` — 对队列稳健的事件研究权重。
+- `design_robust_event_study` — 对设计稳健的动态 ATT。
+- `did_misclassified` — 对处理误分类稳健的 DiD。
+- `did_bcf` — 用于 DiD 的 Bayesian Causal Forest 封装器。
+
+**Conformal 推断前沿方法（扩展 `sp.conformal_causal`）**
+
+- `conformal_debiased_ml` — 与去偏 ML 对齐的 conformal 区间。
+- `conformal_density_ite` — 密度值 ITE conformal 界限。
+- `conformal_fair_ite` — 受公平性约束的 ITE conformal。
+- `conformal_ite_multidp` — 多阶段差分隐私 ITE conformal 界限。
+
+**近端因果前沿方法（扩展 `sp.proximal`）**
+
+- `bidirectional_pci` — 双侧代理变量因果推断。
+- `fortified_pci` — 方差强化 PCI。
+- `pci_mtp` — 经多重检验校正的 PCI。
+- `select_pci_proxies` — 自动代理变量选择器。
+
+**分位数 / 分布 IV 前沿方法（扩展 `sp.qte`）**
+
+- `beyond_average_late` — 针对异质分位数处理效应的超越均值 LATE。
+- `qte_hd_panel` — 高维面板 QTE。
+
+**RD 前沿方法（扩展 `sp.rd`）**
+
+- `rd_distribution` — 分布值（函数型）RD。
+- `rd_multi_score`、`rd_interference` — 已在此前版本发布。
+
+**时间序列因果发现（扩展 `sp.causal_discovery`）**
+
+- `pcmci` / `lpcmci` / `dynotears` — Peter-Clark-MCI 方法族，用于观测数据和存
+  在潜在混杂因素的时间序列 DAG 发现。
+
+**LTMLE 生存分析 + 纵向 BCF（扩展 `sp.tmle` / `sp.bcf`）**
+
+- `ltmle_survival` — 针对处理随时间变化的生存结局的 LTMLE。
+- `bcf_longitudinal` — 用于纵向面板场景的 BCF。
+
+**Target Trial 2025 升级（扩展 `sp.target_trial`）**
+
+- `target_checklist(result)` + `to_paper(..., fmt="target")` — 将 JAMA/BMJ September-2025 
+  TARGET Statement 的 21 项报告清单渲染为已填写的表格，并用 `[AUTO]` / `[TODO]` 
+  标记区分可从方案 + 结果中自动填写的项目和需要作者提供叙述内容的项目。
+
+**合成控制前沿方法**
+
+- `sequential_sdid` — 序贯合成双重差分。
+
+**ML 界限**
+
+- `ml_bounds` — 使用 ML 估计干扰项的部分识别界限。
+
+### 新增 — MCP server + 桥接层
+
+- `sp.agent.mcp_server` — Model Context Protocol server 脚手架，使外部 LLM （Claude、
+  GPT-4、本地模型）可通过自然语言工具调用访问所有已注册的 StatsPAI 函数。
+
+### 已变更
+
+- `statspai/__init__.py`：`__all__` 中新增 80 多个名称；v1.0 注册函数总数约为 
+  729+。
+- 注册表现在为核心新增前沿 API（bridge、fairness、surrogate、mr_multivariable
+  等）提供了详尽的 FunctionSpec 条目。
+
+### 稳定性与范围
+
+- v0.9.17 + v1.0 期间新增的 229 项测试全部通过。
+- 现有 2158 项测试中零回归。
+- v0.9.17 中完成的三校体系完整延续（`sp.epi`、`sp.longitudinal`、 `sp.question`、
+  统一敏感性分析、DAG 推荐器、预注册）。
+
+### 版本管理
+
+- 这是一个主版本（从此版本开始执行破坏性变更政策）。公开 API 范围为 v1.0.0 时 
+  `statspai.__all__` 中的名称；该列表之外的内容仍不稳定。
+
+## \[0.9.17\] - 2026-04-21 — 现代权重 + MC g-formula + weakrobust 面板 + 三学派补全
+
+本次发布分为两部分。首先，针对 v1.0 差距分析中呼声最高的四项缺口进行精简补齐：
+提供 Stata 风格的统一弱工具变量稳健诊断面板、Zubizarreta (2015) 稳定平衡权重估
+计器、Robins (1986) Monte-Carlo g-formula（补充现有的 Bang-Robins ICE），以及
+真正端到端的 `sp.causal()` 编排器。其次，完成三学派补全，将 *计量经济学 ↔ 流行
+病学 ↔ ML* 知识图谱文章映射到 StatsPAI：流行病学基础方法、完整 MR 套件、纵向分
+析分派器、DAG 到估计器推荐器、目标估计量优先 DSL，以及附加到每个 `Result` 对象
+的统一敏感性分析面板。
+
+### 新增
+
+- `sp.weakrobust(data, y, endog, instruments, exog)` — 一次调用即可获得综合诊
+  断面板，包含 Anderson-Rubin (1949)、Moreira (2003) 条件 LR、Kleibergen (2002
+  ) K score 检验、Kleibergen-Paap (2006) rk LM + Wald F、Olea-Pflueger (2013)
+  有效 F，以及 Lee-McCrary-Moreira-Porter (2022) tF 临界值。`WeakRobustResult`
+  提供 `.summary()`、`.to_frame()` 和字典式查找。这是 Stata 19 `estat weakrobust` 
+  的 Python 对应实现，整合了原本分散在 `ivmodel` (R)、`linearmodels` (Python) 
+  以及 Stata 用户编写的 `weakiv` / `rivtest` 包中的功能。
+
+- `sp.sbw(data, treat, covariates, y=..., estimand='att')` — 稳定平衡权重（Zubizarreta 
+  2015 JASA）。在各协变量 SMD 平衡容差约束下，通过 SLSQP 求解权重方差（或 KL）
+  的最小值。支持 ATT / ATC / ATE。报告有效样本量以及平衡前后的对照表。可补充 `sp.ebalance`
+  （精确平衡）和 `sp.cbps` (CBPS)。
+
+- `sp.gformula_mc(data, treatment_cols, confounder_cols, outcome_col)` — Monte-Carlo 
+  参数 g-formula (Robins 1986)。为各时间点的混杂因素拟合条件模型（二元 logit 
+  / Gaussian OLS），并在用户提供的静态或**动态**（可调用对象）治疗策略下模拟反
+  事实轨迹。提供非参数自助法置信区间。可补充现有的 `sp.gformula.ice` (Bang-Robins 
+  2005 ICE)。
+
+- **增强的 `sp.causal()` 工作流** — 在 `estimate` / `robustness` 之后自动运行
+  三个新阶段：
+
+  - `.compare_estimators()` — 感知研究设计的多估计器面板：交错 DiD 使用 CS + SA
+    + BJS + Wooldridge；IV 使用 2SLS + LIML；观察性研究使用 OLS + EB + CBPS +SBW 
+    + DML-PLR。
+  - `.sensitivity_panel()` — 在一个 DataFrame 中整合 E-value + Oster δ\* + Rosenbaum
+    Γ，符合顶级五大经济学期刊所期待的现代“敏感性三联分析”。
+  - `.cate()` — X-Learner 和 Causal Forest 异质性摘要（逐单位 CATE 均值、SD、q10/q50/q90）。
+  - 报告输出新增 4b / 4c / 4d 节。
+  - 可通过 `CausalWorkflow.run(full=False)` 关闭；`_extract_effect` 辅助函数统
+    一提取 `CausalResult` 和 `EconometricResults`。
+
+### 审阅中发现并修复的问题（v0.9.17 内部审阅）
+
+- `SBWResult.__init__` 现在会将 `model_info` + `_citation_key` 传递给父类 `CausalResult`，
+  从而将其接入引用注册表。
+- `MCGFormulaResult._is_binary` 现在要求 0 和 1 两个取值**都**存在——退化列（全
+  为 0 或全为 1）不再触发 logistic Newton-Raphson 迭代。
+- `CausalWorkflow` 中的 `_extract_effect` 在拟合参数中缺少治疗列时现在会返回 NaN，
+  而不会悄然返回截距系数。
+- 已澄清 SBW 文档字符串：报告的 SE 是以权重为条件的；需要完整传播参数不确定性
+  的用户应在外部对 `sp.sbw` 进行自助法重抽样。
+
+### 延后至单独的冲刺
+
+原始差距分析还指出了 TMLE 动态方案与删失、Conformal 反事实 / 加权变体、PCMCI时
+间序列因果发现、Partial-ID + ML 界限，以及 Agent-MCP 服务器集成。这些内容各自
+都足够庞大，应由专门的冲刺聚焦完成，而不是在此处以半成品形式发布。
+
+### 新增 — 三学派补全（2026-04-21 子版本）
+
+本次补全源于与以下文章进行交叉引用审计： "Causal Inference Knowledge Map — Econometrics
+, Epidemiology, ML", 审计指出相对于 Stata / R 的领先水平，仍有以下缺口：Layer-4 
+(*What If*) 纵向分析、流行病学入门基础方法、孟德尔随机化诊断深度、DAG 到估计
+器的用户体验，以及目标估计量优先工作流。
+
+**流行病学基础方法 (`sp.epi`) — 新子包**
+
+- `odds_ratio`, `relative_risk`, `risk_difference`, `attributable_risk` (Levin 
+  PAF), `incidence_rate_ratio`, `number_needed_to_treat`, `prevalence_ratio` 
+  —使用 Woolf / Fisher 精确法 / Katz / Wald / Newcombe 区间；`incidence_rate_ratio` 
+  使用 Clopper-Pearson 精确 Poisson 置信区间；对零单元格使用 Haldane-Anscombe
+  校正。
+- `mantel_haenszel`（OR / RR，使用 Robins-Breslow-Greenland 方差），`breslow_day_test`
+  （OR 齐性检验，采用 Tarone 校正）。
+- `direct_standardize`, `indirect_standardize` — 直接标准化率 + SMR，并提供 Garwood
+  精确 Poisson 置信区间。
+- `bradford_hill` — 结构化的九视角因果评估准则，并进行前提检查（缺乏时间先后性
+  时不得声称存在因果关系）。
+
+**孟德尔随机化完整套件 (`sp.mr` / `sp.mendelian`)**
+
+- `mr_heterogeneity` — Cochran's Q (IVW) 或 Rücker's Q' (Egger) + I²。
+- `mr_pleiotropy_egger` — 用于检验方向性水平多效性的正式 MR-Egger 截距检验（Bowden 
+  2015）。
+- `mr_leave_one_out` — 逐个排除 SNP 的 IVW 敏感性分析。
+- `mr_steiger` — Hemani (2017) 方向性检验，使用各性状 R² 贡献的 Fisher-z。
+- `mr_presso` — Verbanck (2018) 全局离群值检验 + 逐 SNP 离群值检测 + 原始值与
+  校正值比较的偏差检验。
+- `mr_radial` — Bowden (2018) 径向重新参数化 + 基于 Bonferroni 阈值的离群值标
+  记。
+
+**目标试验模拟 — 可用于发表的报告**
+
+- `TargetTrialResult.to_paper(fmt=...)` / `sp.target_trial.to_paper` — 生成符
+  合 STROBE 的“方法 + 结果”内容块，支持 Markdown / LaTeX / 纯文本，可直接纳入
+  论文。表格结构严格遵循 JAMA 2022 七组件 TTE 规范。
+
+**纵向因果分析分派器 (`sp.longitudinal`) — 新子包**
+
+- `sp.longitudinal.analyze` — 统一入口，根据数据形态和提供的方案对象自动分派至 
+  IPW（无时变混杂因素）/ MSM（具有时变混杂因素的动态方案）/ 参数 g-formula ICE
+  （静态方案）。
+- `sp.longitudinal.contrast` — `E[Y(regime_a)] - E[Y(regime_b)]` 的代入式估计
+  器，并提供 delta 方法 SE。
+- `sp.regime`, `sp.always_treat`, `sp.never_treat` — 动态治疗方案 DSL，支持静
+  态序列、可调用对象，以及安全的 `"if cd4 < 200 then 1 else 0"` 字符串 DSL。字
+  符串 DSL 会解析为白名单 AST，再由轻量级树遍历器解释——不会执行动态代码，并会
+  在构造方案时拒绝不允许的结构。
+
+**目标估计量优先因果问题 DSL (`sp.causal_question`) — 新子包**
+
+- `sp.causal_question(treatment=, outcome=, estimand=, design=, ...)` 可预先声
+  明因果问题。`.identify()` 选择估计器并列出用户需要论证的识别假设；`.estimate()` 
+  运行分析；`.report()` 生成 Markdown 格式的“方法 + 结果”段落。
+- 自动设计会在存在工具变量时选择 IV，在给出运行变量 + 截点时选择 RD，在存在面
+  板数据 + 时间时选择 DiD，在有重复测量时选择纵向分析，否则选择基于可观测变量
+  选择的方法。
+- 内部会分派至 `sp.regress` / `sp.aipw` / `sp.iv` / `sp.did` / `sp.rdrobust` / 
+  `sp.synth` / `sp.longitudinal.analyze` / `sp.event_study`.
+
+**DAG → 估计器推荐器 (`sp.dag.recommend_estimator`)**
+
+- `DAG.recommend_estimator(exposure, outcome)` — 检查已声明的图，并推荐 StatsPAI
+  估计器，同时以通俗语言说明识别依据。优先顺序：后门调整（OLS / IPW / 匹配）→IV
+  （启发式相关性 + 排除性检查）→ 前门 → 不可识别（并提供敏感性分析备选方案）。
+- 自动检测因果路径上的中介变量。
+
+**统一敏感性分析面板 (`sp.unified_sensitivity`)**
+
+- `result.sensitivity()` — 为 `CausalResult` 和 `EconometricResults` 添加的方
+  法。一次调用即可运行 E-value（始终计算）、Oster δ（提供 R² 输入时）、Rosenbaum
+  Γ（存在匹配结构时）、Sensemakr（回归模型），以及 breakdown-frontier 偏差估计。
+
+### 变更（三学派补全）
+
+- `__init__.py`：顶层新增公开 40 多个名称，包括 `sp.epi`、 `sp.longitudinal`, 
+  `sp.question`, `sp.tte` / `sp.mr` 简写别名。
+
+### 修复（三学派补全）
+
+- 方案 DSL：AST 校验从求值时移至编译时，因此会在 `sp.regime(...)` 构造时立即拒
+  绝不安全表达式，无需等待提供历史数据。
+
+## \[0.9.16\] - 2026-04-20 — v1.0 广度扩展 + 贝叶斯系列完善 + Rust Phase-2 CI
+
+这是 v1.0 广度扩展以来规模最大的一次发布。将 StatsPAI 覆盖到 Mixtape + What If
++ Elements of Causal Inference 的完整课程体系：Hernan-Robins 目标试验模拟、Pearl-Bareinboim 
+SCM 机制、现代离策略 / 神经因果估计器；此外还新增三项功能以弥补贝叶斯系列长期
+存在的缺口，并为 Rust HDFE 技术预研搭建 CI 框架。
+
+### 新增（0.9.16）— v1.0 广度扩展（新增 27+ 个模块）
+
+**目标试验模拟与删失 (`sp.target_trial`, `sp.ipcw`)**
+
+- `target_trial_protocol`, `target_trial_emulate`, `clone_censor_weight`, `immortal_time_check` 
+  — JAMA 2022 七组件 TTE 框架，明确支持资格标准 / 时间零点 / 符合方案对比。
+- `ipcw` — Robins-Finkelstein 逆概率删失权重（合并 logistic 或 Cox 风险模型），
+  支持稳定化 + 截断。
+
+**SCM / DAG 机制（扩展 `sp.dag`）**
+
+- `identify` — Shpitser-Pearl ID 算法；可识别时返回不含 do 运算的目标估计量，
+  否则返回见证 hedge `(F, F')`。
+- `do_rule1 / do_rule2 / do_rule3`、`do_calculus_apply` — 在干预后的图 `G_{bar X}`、
+  `G_{underline Z}` 和 `G_{bar Z(W)}` 上通过 d-separation 实现 do-演算。
+- `swig` — Richardson-Robins 单世界干预图，通过拆分受干预变量的节点构造。
+- `SCM` — 反事实运行器，采用溯因-行动-预测流程；非高斯结构方程提供拒绝采样回退
+  方案。
+- `llm_dag` — 基于 LLM 从自由格式描述中提取 DAG。
+
+**含潜变量的因果发现 (`sp.causal_discovery`)**
+
+- `fci` — 用于含未观测混杂因素 PAG 的 FCI (Zhang 2008)：骨架 + v-结构 + FCI 规
+  则 R1-R4。
+- `icp`, `nonlinear_icp` — Peters-Bühlmann-Meinshausen 不变因果预测；线性 F 检
+  验 / K-S 非线性不变性检验。
+
+**可迁移性 (`sp.transport`)**
+
+- `transport_weights_fn` / `transport_generalize` — Stuart / Dahabreh 密度比迁
+  移，采用逆抽样几率加权。
+- `identify_transport` — Bareinboim-Pearl s-admissibility；枚举选择图上的调整
+  集并返回迁移公式。
+
+**离策略评估 (`sp.ope`)**
+
+- `ips`, `snips`, `doubly_robust`, `switch_dr`, `direct_method`, `evaluate` —Dudik-Langford-Li 
+  DR 系列，以及用于 bandit / RL 的 Swaminathan-Joachims SNIPS和 Wang-Agarwal-Dud
+  ík Switch-DR。
+
+**深度因果与潜在混杂模型 (`sp.neural_causal`)**
+
+- `cevae` — Louizos et al. CEVAE，提供 PyTorch 路径 + numpy 变分回退，确保导入
+  不会失败。
+
+**纵向分析 / G-methods (`sp.gformula`, `sp.tmle`, `sp.dtr`)**
+
+- `gformula_ice_fn` — Bang-Robins 迭代条件期望参数 g-formula；采用序贯反向回归
+  并递归 plug-in 策略。支持静态 / 标量 / 可调用策略。
+- `ltmle` — van der Laan-Gruber 纵向 TMLE。
+- `q_learning`, `a_learning`, `snmm` — 动态治疗方案估计器。
+
+**全技术栈新增估计器**
+
+- 因果森林：`multi_arm_forest`, `iv_forest`, `survival/causal_forest` (Cui-Kosorok 
+  2023).
+- 邻近效应：`negative_controls`, `pci_regression` (Miao-Shi-Tchetgen)。
+- 干扰效应：`network_exposure` (Aronow-Samii 2017), `peer_effects`。
+- 剂量-反应：`vcnet` + `scigan` (Nie-Brunskill-Wager 2021)。
+- 匹配：`genmatch` (Diamond-Sekhon 2013)。
+- 敏感性分析：`rosenbaum_bounds`。
+- 空间分析：`spatial_did`, `spatial_iv` (Kelejian-Prucha 1998)。
+- 时间序列：`its`（中断时间序列）。
+- 界限：`balke_pearl`。
+- 中介分析：`four_way_decomposition` (VanderWeele 2014)。
+
+**注册表 / agent 接口**
+
+- 为新的旗舰 API 手动编写了 11 个 `FunctionSpec` 条目，每个都包含参数架构、标
+  签和规范参考文献。
+- `sp.list_functions()` 现在会报告 664 个条目。
+- `sp.search_functions("target trial")` / `"invariance"` / `"transport"` 均可
+  正确检索。
+
+### 新增（0.9.16）— 补齐贝叶斯系列缺口
+
+- **`bayes_mte(mte_method='bivariate_normal')`** — 完整的教科书式 Heckman-Vytlacil
+  三元正态模型 `(U_0, U_1, V) ~ N(0, Σ)`，其中 `D = 1{Z'π > V}`。通过结构方程
+  中的 inverse-Mills-ratio 校正识别结构差异 `β_D = μ_1 - μ_0` 和两个选择协方差 
+  `σ_0V, σ_1V`，因此 `MTE(v) = β_D + (σ_1V - σ_0V)·v` 在 V 尺度上具有闭式线性
+  形式。要求 `selection='normal'` 和 `first_stage='joint'`；若用户将 `poly_u`
+  设为其他值，则会将其覆盖为 1 并发出 `UserWarning`。将 `b_mte` 作为二维向量 Deterministic 
+  `[β_D, σ_1V - σ_0V]` 暴露，因此所有下游代码路径（`mte_curve`、ATT/ATU 积分
+  器、`policy_effect`）均无需更改即可运行。这补齐了 Heckman-Vytlacil 流程中最
+  后缺失的一环；该流程由 `selection='uniform'`/`'normal'` + `mte_method='polynomial'`
+  /`'hv_latent'` 启动。
+
+- **`bayes_did(cohort=...)` + `BayesianDIDResult`** — 用户提供 `cohort` 列时（通
+  常是交错设计中的首次处理期），标量 `tau` 会在相同的 `Normal(prior_ate)` 先验
+  下替换为长度为 `n_cohorts` 的 `tau_cohort` 向量。结果包含 `cohort_summaries: Dict[str, dict]` 
+  和 `cohort_labels`；顶层汇总 ATT 为按处理组样本量加权的各队列 τ 后验均值。`result.tidy(terms='per_cohort')` 
+  会为每个队列返回一行，`term='cohort:<label>'`；也支持通过显式 `terms=['att', 'cohort:2019', ...]` 
+  为 modelsummary / gt 流程选择条目。**向后兼容：**不传入 `cohort=...` 时，返
+  回的 `BayesianDIDResult` 与 v0.9.15 `BayesianCausalResult` 的行为逐字节一致。
+
+- **`bayes_iv(per_instrument=True)` + `BayesianIVResult`** — 多工具变量拟合时，
+  还会针对每个 `Z_j` 运行一个恰好识别的 Bayesian IV 子拟合，并将各工具变量后验
+  存储为 `instrument_summaries: Dict[str, dict]`。接口与 DID 扩展一致：`tidy(terms='per_instrument')` 
+  为每个 `Z` 输出一行，`term='instrument:<name>'`。顶层汇总 LATE 仍来自联合过
+  度识别拟合；各工具变量行是附加诊断。子拟合先验和采样器控制与汇总拟合一致，因
+  此运行时间约按 `(K+1)×` 增长。
+
+- **`.github/workflows/build-wheels.yml`** — Rust Phase-2 cibuildwheel 矩阵工
+  作流（macOS arm64 + x86_64、manylinux_2_17 x86_64 + aarch64、musllinux_1_2 x86_64、
+  Windows x86_64），并包含 `check_rust_present` 守卫作业；若不存在 `rust/statspai_hdfe/Cargo.toml`
+  （即 `main` 分支当前状态），工作流将不执行任何操作。该工作流会在 `feat/rust-hdfe` 
+  / `feat/rust-phase2` 上，以及涉及 `rust/**` 的 PR 中自动启动，因此 Rust 技
+  术预研分支就绪后 CI 即可运行，无需再为 CI 框架单独提交第二个 PR。
+
+### 测试（0.9.16）
+
+- `tests/test_bayes_mte_bivariate_normal.py` — 7 项测试，覆盖 API 校验（selection
+  + first_stage 门槛、poly_u 覆盖）、后验中的结构参数、方法标签内容，以及 n=800
+  真实三元正态 DGP 上的斜率恢复。
+- `tests/test_bayes_did_cohort.py` — 9 项测试，覆盖向后兼容（不传 cohort → 单
+  行 tidy 与 v0.9.15 相同）、队列拟合生成摘要、通过 `per_cohort` + 显式列表返
+  回多行 tidy、未知项触发异常、在真实 ATT 异质（2.0 vs 0.5）的双队列交错 DGP中
+  恢复 τ 顺序，以及在 model_info 中记录队列权重。
+- `tests/test_bayes_iv_per_instrument.py` — 8 项测试，覆盖向后兼容、逐工具变量
+  摘要生成、`per_instrument` tidy、显式列表 tidy、未知项触发异常、未运行子拟合
+  时请求 `per_instrument` tidy 的错误路径，以及双 Z DGP 中每个子拟合的 HDI 覆
+  盖真实 LATE。
+
+### 本次未包含
+
+- 在真实 CI 运行器硬件上对 cibuildwheel 矩阵进行端到端测试——这必须在 Rust 包所
+  在的 `feat/rust-hdfe` 分支上进行。`main` 上的工作流按设计不会运行。
+
+## \[0.9.15\] - 2026-04-20 — 多项 `tidy(terms=[...])` + ATT/ATU prob_positive
+
+完成 v0.9.13 逐人群 ATT/ATU 不确定性与 broom 流程的集成。用户现在可以一次调用 
+`pd.concat` 合并不同拟合中的 ATE/ATT/ATU 行。
+
+### 新增（0.9.15）
+
+- **`BayesianMTEResult.tidy(conf_level=None, terms=None)`** 覆盖实现：
+
+  - `terms=None`（默认）— 行为不变，返回单个 ATE 行。
+  - `terms='ate' | 'att' | 'atu'` — 返回对应项的单行结果。
+  - `terms=['ate', 'att', 'atu']` — 返回多行 DataFrame。
+  - 名称无效 → 明确的 `ValueError`。
+
+- **新增两个结果字段**：`att_prob_positive`, `atu_prob_positive` （默认设为 NaN，
+  以兼容 v0.9.15 之前的快照）。由 `_integrated_effect` 根据逐次抽样的 ATT/ATU
+  后验填充。
+
+- **`_integrated_effect` 返回 5 元组** `(mean, sd, hdi_lower, hdi_upper, prob_positive)`。
+  调用方解包并传递给结果对象。
+
+### 第 B 轮审阅发现 1 个高优先级问题；已在第 C 轮修复
+
+- **高优先级-1** — 标签不一致：默认 `tidy()`（通过父类 `estimand.lower()`）输
+  出 `term='ate (integrated mte)'`，但 `tidy(terms='ate')` 输出较短的字面值 `'ate'`。
+  用户在 `pd.concat` 中混用两种调用方式时会破坏逐字节兼容性。**已修复** — `_row('ate')` 
+  现在也使用 `self.estimand.lower()`，因此两种路径会生成相同行。ATT / ATU 行
+  保留短标签（父类默认行为中没有先例；对于新增项，简短标签更符合 broom 的自然
+  形式）。
+
+- Round C：0 个阻塞项。
+
+### 测试（0.9.15）
+
+- `tests/test_bayes_mte_tidy.py`（13 项测试）— 向后兼容的默认架构、三个标签各
+  自的单项路径、多行顺序保留、合并流程、拒绝无效项与有效/无效混合项、NaN prob_positive
+  桩对象向后兼容、真实拟合中填充 prob_positive 标量，以及**默认与显式标签逐字
+  节一致**（第 C 轮回归测试）。
+- 贝叶斯系列测试套件：聚焦测试 101/101 通过。
+
+### 设计规范（0.9.15）
+
+- `docs/superpowers/specs/2026-04-20-v0915-tidy-multiterm.qmd`
+
+### 非目标（0.9.15）
+
+- 其他贝叶斯估计器的多项 `.tidy()` — DID/RD/IV 没有 ATT/ATU 概念；它们已经会输
+  出主要目标估计量行。
+- 完整的双变量正态 HV 模型。
+- Rust Phase 2。
+
+------------------------------------------------------------------------
+
+## \[0.9.14\] - 2026-04-20 — 摘要渲染补齐 v0.9.13 规范 §3.3
+
+这是一个小型补丁版本，完成了 v0.9.13 规范 §3.3 中“在 `summary()` 中显示 ATT/ATU”
+的承诺。该功能在发布时并未真正接入（虽然六个不确定性字段已加入，但 `summary()` 
+从未显示这些字段）。
+
+### 新增（0.9.14）
+
+- **`BayesianMTEResult.summary()`** 覆盖实现。扩展 `BayesianCausalResult.summary`，
+  增加 `Population-integrated effects` 区块：
+
+  ```         
+  ATT: 0.2407 (sd 0.0370, 95% HDI [0.1693, 0.3136])
+  ATU: 0.2147 (sd 0.0435, 95% HDI [0.1341, 0.2947])
+  ```
+
+  在框线 `=` 内渲染，以保持视觉一致。任一 SD 为 NaN 时（子群为空或结果由 v0.9.13 
+  之前版本反序列化而来）会静默跳过。
+
+### 第 B 轮审阅：无阻塞项
+
+审阅者确认：
+
+1.  `base.endswith('=' * 70)` 判断准确——父类 `summary()` 返回
+    `'\n'.join(lines)`，且框线是最后一个元素。
+2.  区块拼接后，闭合框线的视觉效果得以保留。
+3.  NaN 桩对象路径安全；回退分支提供防御性处理。
+4.  `'ATT:'` / `'ATU:'` 是唯一子字符串，不会与父类输出冲突。
+5.  仅执行读取操作，且线程安全。
+
+### 测试（0.9.14）
+
+- `tests/test_bayes_mte_uncertainty.py` 现在包含：
+  - `test_summary_shows_att_atu_uncertainty` — 拟合后，字符串包含 `'ATT:'`、`'ATU:'`、
+    `'sd '`、`'HDI ['`。
+  - `test_summary_skips_att_atu_when_nan` — NaN-SD 桩对象 → 输出中不含 `'ATT:'` 
+    / `'ATU:'`。
+- 完整贝叶斯测试套件：聚焦 MTE 及相关测试 88/88 通过，用时 1:55。
+
+### 非目标（0.9.14）
+
+- 将 ATE/ATT/ATU 分别作为独立行的多行 `.tidy()` 变体 — 已排入 v0.9.15+。
+- 完整的双变量正态 HV 模型。
+- Rust Phase 2。
+
+------------------------------------------------------------------------
+
+## \[0.9.13\] - 2026-04-20 — ArviZ HDI 兼容层 + ATT/ATU 不确定性
+
+这是一次小而关键的清理发布。关闭了在 v0.9.10 / v0.9.11 / v0.9.12 代码评审中延
+期的两项事项。
+
+### 新增（0.9.13）
+
+- **`_az_hdi_compat(samples, hdi_prob)`** 位于 `statspai.bayes._base` — 首先调
+  用 `az.hdi(samples, hdi_prob=...)`，在 `TypeError` 时回退到 `az.hdi(samples, prob=...)`。
+  将贝叶斯子包中每个 `az.hdi(...)` 调用都集中到一处，这样不可避免的 arviz ≥0.18 
+  关键字重命名只需一行修正即可。此前已被 v0.9.12 round-C 评审识别为时间炸弹。
+
+- **`BayesianMTEResult` 上的 ATT / ATU 不确定性**：
+
+  - `att_sd`, `att_hdi_lower`, `att_hdi_upper`
+  - `atu_sd`, `atu_hdi_lower`, `atu_hdi_upper`
+
+  `_integrated_effect` 现在返回 `(mean, sd, hdi_lower, hdi_upper)`，而不是 `(mean, sd)`。
+  父结果上的 `posterior_sd` 已覆盖 ATE 不确定性——不存在冗余的 `ate_sd`。
+
+- **`BayesianMTEResult` 的追加字段顺序** — 六个新字段全部按 NaN 默认值填充，且
+  放置在 v0.9.12 方案（`selection`）之后。早期版本的序列化结果可安全反序列化。
+
+### 第 B 轮代码评审未发现阻塞项
+
+审阅者确认：
+
+1.  `_az_hdi_compat` 的回退形态对未来任何 arviz 关键字重命名都正确。
+2.  通过实时自省验证了数据类字段顺序。
+3.  不存在对 NaN 字段的 `__hash__` 风险；broom 风格的 `.tidy()` /
+    `.glance()` 有意不暴露新的 SD/HDI 字段（需显式访问）。
+4.  `mte.py` + `hte_iv.py` 中的导入已清理。
+5.  空群体 NaN 保护是防御性措施；从 `bayes_mte` 不可能到达，因为上游的
+    `_logit_propensity` 已强制要求 2 类输入。测试也已重命名，以更诚实地
+    反映这一点。
+
+一项中等问题（测试文档字符串误标）已在现场修正。
+
+### 事件日志
+
+一次大规模的 `regex` 重写将 `az.hdi(...)` 全部改成 `_az_hdi_compat(...)`， 不
+慎命中了辅助函数自身的实现体，导致了 `_az_hdi_compat → _az_hdi_compat` 的自递
+归问题。该问题在运行贝叶斯聚焦测试时被捕获 （在任何贝叶斯估计器真正上线时都会
+触发栈溢出）。随后在同一会话中已回滚并手动重做， 且在测试进入开发环境之外前就
+修复了。
+
+### 测试（0.9.13）
+
+- `tests/test_bayes_hdi_compat.py`（4 个测试）— 在当前 arviz 上前向兼容， 在猴
+  子补丁模拟未来 arviz 时回退，返回长度为 2 的数组， 当两个关键字都被拒绝时传
+  播 `TypeError`（不会静默成功）。
+- `tests/test_bayes_mte_uncertainty.py`（4 个测试）— ATT/ATU SD 已填充且 \> 0，
+  HDI 区间均值正确，无冗余 `ate_sd`，真实 DGP 下双边均有限。
+- 贝叶斯系族测试：145/145 个聚焦 MTE + 兄弟测试全部通过。
+
+### 设计规范
+
+- `docs/superpowers/specs/2026-04-20-v0913-hdi-compat-and-att-sd.qmd`
+
+### 非目标（0.9.13）
+
+- 完整的双变量正态 HV `(U_0, U_1, V) ~ N(0, Σ)` — 仍排队等待。
+- Rust Phase 2。
+- 在 `.tidy()` 上公开 ATT/ATU HDI — 目前 `.tidy()` 只描述主估计量（ATE）； 为 
+  ATT/ATU 增加多行变体属于 v0.9.14+ 的 API 问题。
+
+------------------------------------------------------------------------
+
+## \[0.9.12\] - 2026-04-20 — Probit 规模 MTE（Heckman 选择框架）
+
+为 `sp.bayes_mte` 增加了第三个正交维度：MTE 多项式现在既可以在统一尺度 `U_D ∈ [0, 1]`
+（v0.9.11 默认）上拟合，也可以在 probit / V 规模 `V = Φ^{-1}(U_D) ∈ ℝ` 上拟合—
+—这是经典 Heckman (1979) / HV 2005 框架。 所有 `(first_stage, mte_method, selection)` 
+组合都可拟合。
+
+### 新增（0.9.12）
+
+- **`sp.bayes_mte(..., selection='uniform' | 'normal')`** — 新关键字。
+
+  - `'uniform'`（默认）保留 v0.9.11 行为：在 `U_D ∈ [0, 1]` 上进行多项式拟合。
+  - `'normal'` 将横坐标重新解释为 `V = Φ^{-1}(U_D)`，在张量侧使用 `pt.sqrt(2) * pt.erfinv(2a-1)`，
+    在 NumPy 侧使用 `scipy.stats.norm.ppf`。在严格 HV + 双变量正态假设下， `poly_u=1 + selection='normal' + mte_method=
+    'hv_latent'` 可精确恢复线性 Heckman MTE 斜率。
+
+- **`mte_curve` 在 `selection='normal'` 下暴露 `v` 列**（否则为空），使用户能
+  够在模型拟合使用的尺度上绘图。
+
+- **`statspai.bayes._base` 中共享的 `PROBIT_CLIP` 常量** — 拟合期、ATT/ATU 积
+  分器以及 `policy_effect` 都读取相同的截断值，从而使三条路径保持数值一致。
+
+### Heckman DGP 上的经验恢复结果（真实 `(b_0, b_1) = (0.5, 1.5)`）
+
+| combo                   | `b_0` | `b_1`  |
+|-------------------------|-------|--------|
+| plugin × polynomial × V | -0.73 | 0.82   |
+| plugin × hv_latent × V  | 0.42  | 1.37 ✓ |
+| joint × polynomial × V  | -0.73 | 0.81   |
+| joint × hv_latent × V   | 0.46  | 1.40 ✓ |
+
+与早期版本一致：`hv_latent` 能恢复真实值；`polynomial` 拟合的是 `g(v)` 而不是 
+`MTE(v)`， 因此存在偏差。
+
+### 第 B 轮评审发现 2 个阻塞项 + 2 个高优先级问题；第 C 轮已全部修复
+
+1.  **阻塞项-1**：`_integrated_effect`（ATT/ATU）直接对多项式幂提升 `U_population`， 
+    即使在 `'normal'` 下后验也在 V 规模上。**已修复** — 先转换为 `Φ^{-1}(U_population)`。
+2.  **阻塞项-2**：`BayesianMTEResult.policy_effect` 在 `'normal'` 下计算 `u_pow = [u^k ...]`，
+    而不是 `[v^k ...]`，从而将 V 规模多项式按 u 规模幂进行积分。 **已修复**— `BayesianMTEResult` 
+    现在携带 `selection` 字段， 且 `policy_effect` 在需要时会将网格转换到 V 
+    规模。回归测试断言在 `'normal'` 下 `policy_effect(policy_weight_ate())` 与 
+    `.ate` 误差至 1e-8。
+3.  **高优先级-1**：`mte_curve` 缺少 `v` 列 — **已补上**。
+4.  **第 C 轮后续**：提取出 `PROBIT_CLIP = 1e-6` 到共享模块常量，并由 `mte.py`
+    和 `_base.py` 共同消费，因此三处拟合/汇总/政策路径不会出现漂移。
+
+### 测试（0.9.12）
+
+- `tests/test_bayes_mte_selection.py`（新增，12 个测试）— 向后兼容、 方法标签、
+  Heckman DGP 恢复、所有 8 组合正交性、输入校验、`v` 列存在/缺失、 ATT/ATU V规
+  模正确性（第 C 轮回归）、`policy_effect` V 规模与 `.ate` 一致性（第 C 轮回归）、 
+  uniform 与 normal 的非平凡分歧。
+- 78 个聚焦 MTE 测试全部通过。
+
+### 非目标（0.9.12）
+
+- 完整的双变量正态误差协方差 `(U_0, U_1, V) ~ N(0, Σ)`，并带自由 `ρ_{0V}`、`ρ_{1V}` 
+  — 收敛要求高的 MvNormal 混合模型，排队至 0.9.13+。
+- Rust Phase 2 — 单独分支。
+
+------------------------------------------------------------------------
+
+## \[0.9.11\] - 2026-04-20 — 多工具变量 MTE + 真正的 CHV-2011 PRTE 权重
+
+关闭两项长期存在的 API 缺口，并清理一项经验数学债务。
+
+### 新增（0.9.11）
+
+- **`sp.bayes_mte(instrument: str | Sequence[str], ...)`** — MTE 现在接受多个
+  工具变量，和 `sp.bayes_iv` / `sp.bayes_hte_iv` 保持一致。 标量调用保持不变。
+- **`sp.policy_weight_observed_prte(propensity_sample, shift)`** — 从观测到的
+  倾向分布中得到真正的 Carneiro-Heckman-Vytlacil (2011) PRTE 权重， 形式为 `kde.integrate_box_1d(u-Δ, u) / Δ`
+  （CDF 差值）。关闭了 v0.9.9 中 `policy_weight_prte` 被标记为程式化的文档缺口。
+
+### 第 B 轮评审发现 2 个高优先级 + 3 个中等问题；全部已修复
+
+1.  **CHV 符号错误** — 我最初的 `(kde(u) - kde(u-Δ))/Δ` 以及审阅人的交换方案都
+    不对 （两者都计算的是密度导数，而不是 CDF 差值）。自我扫查确认 CHV-2011 定
+    理 1 是 CDF 差值。 通过 `integrate_box_1d` 修复。经验上，均匀倾向 + Δ=0.2
+    现在给出 textbook 梯形， 之前出现了虚假的边界尖峰。
+2.  **无条件 `np.clip(w, 0, None)`** 会悄悄改变估计量。已移除 — 收缩政策现在产
+    生带符号的负权重，符合 CHV 约定。
+3.  **`gaussian_kde` 线程安全** — 强制在构建器内完成协方差预计算。
+4.  **`model_info['instrument']` 类型不一致** — 移除了原始键；现在仅保留 `instruments`
+    （列表）与 `n_instruments`。
+5.  **向后兼容测试** 使用相对后验 SD 的容差。
+
+### 测试（0.9.11）
+
+- `tests/test_bayes_mte_multi_iv.py`（9 个测试）。
+- `tests/test_bayes_mte_policy.py`（+7 个测试）。
+- 61 个聚焦 MTE 测试全部通过。
+
+### 代码评审
+
+- 第 B 轮代理：5 项问题。自我清扫纠正了一项代理弄错的高优先级问题。 5 项全部已
+  修复。
+- 第 C 轮代理：零个阻塞性问题。
+
+### 设计规范（0.9.11）
+
+- `docs/superpowers/specs/2026-04-20-v0911-multi-iv-mte-observed-prte.qmd`
+
+------------------------------------------------------------------------
+
+## \[0.9.10\] - 2026-04-20 — HV 潜变量 MTE（通过潜在 `U_D` 实现经典 Heckman-Vytlacil）
+
+关闭 v0.9.9 标记但未处理的语义债：以往版本实际上拟合的是倾向 `p_i` 上的多项式 
+`g(p)`（即“在倾向上的 LATE”），只有在 HV-2005 线性可分离 + 双变量正态误差条件
+下，它才等同于 textbook MTE。v0.9.10 增加了一个可选的**完全 HV-忠实**模型， 为
+每个单位采样一个潜在 `U_D_i ~ Uniform(0, 1)`，通过截断均匀重参数化技巧，使拟合
+的多项式成为真正的后验 `tau(u) = E[Y_1 - Y_0 | U_D = u]`。
+
+### 新增（0.9.10）
+
+- **`sp.bayes_mte(..., mte_method='polynomial' | 'hv_latent')`** — 新关键字，
+  与现有 `first_stage` 关键字正交。
+
+  - `'polynomial'`（默认）— v0.9.9 行为；在倾向上做多项式拟合。
+
+  - `'hv_latent'` — textbook HV。对每个单位，采样 `raw_U_i ~ Uniform(0, 1)`，
+    然后按确定性变换：
+
+    ```         
+    D_i = 1 ⇒ U_D_i = raw_U_i · p_i            ∈ [0, p_i]
+    D_i = 0 ⇒ U_D_i = p_i + raw_U_i·(1 - p_i)  ∈ [p_i, 1]
+    ```
+
+    之后在 `U_D_i` 上评估多项式（而不是 `p_i`）。 结构方程： `Y_i = α + β_X' X_i + D_i · τ(U_D_i) + ε_i`。
+
+  与 `first_stage` 正交：所有四种 `(plugin|joint) × (polynomial|hv_latent)` 组
+  合都可运行。
+
+- **内存警告保护** — `hv_latent` 会注册一个形状为 `(n,)` 的潜在变量， 在后验中
+  以 `(chains, draws, n)` 存储。函数在 `n × draws × chains > 50,000,000`（约 400 
+  MB，按 f64 计）时发出 `UserWarning`， 并提示 `draws`、`chains` 和 `mte_method='polynomial'` 
+  作为缓解方案。
+
+### HV 增强因子分解（在文档字符串中记录）
+
+`bayes_mte` 使用标准的 Form-2 数据增广分解：
+
+```         
+p(Y, D, U_D | p, θ) = p(Y | U_D, D, θ) · p(U_D | D, p) · p(D | p)
+```
+
+其中截断均匀变换给出 `p(U_D | D, p)`，而 `pm.Bernoulli(D | p)` 给出边际 `p(D | p)`。
+两者都需要 — 在反事实实验中丢掉 Bernoulli 会使 `piZ` 符号翻转 （真实 0.8 →后验 
+-1.01），并使 MTE 多项式偏向 `[0.81, 1.25]` 而非真实 `[2, -2]`。 这一测试已记
+录在 v0.9.10 的第 B 轮代码评审中。
+
+### 经验恢复证据
+
+递减 MTE DGP，真实值为 `(b_0, b_1) = (2.0, -2.0)`：
+
+| combo               | b_0 posterior | b_1 posterior | recovers? |
+|---------------------|---------------|---------------|-----------|
+| plugin × polynomial | 1.73          | -0.43         | biased    |
+| plugin × hv_latent  | 2.03          | -2.13         | ✓         |
+| joint × polynomial  | 1.73          | -0.44         | biased    |
+| joint × hv_latent   | 2.05          | -2.16         | ✓         |
+
+多项式模式在 HV DGP 上系统性偏差 — v0.9.9 增加的诚实警示已被经验验证； `hv_latent` 
+是数学上正确的修正。
+
+### 方法标签
+
+- `polynomial` → `"Bayesian treatment-effect-at-propensity (...)"` （保留 v0.9.9 
+  标签）。
+- `hv_latent` → `"Bayesian HV-latent MTE (...)"`。
+
+### 测试（0.9.10）
+
+- **`tests/test_bayes_mte_hv_latent.py`**（10 个测试）— API、在 HV DGP 上恢复
+  真实 `(b_0, b_1) = (2, -2)`、与 polynomial 模式在同一 DGP 上的分歧、 与 `first_stage='joint'` 
+  的正交性、输入校验、内存警告在阈值以上触发（`unittest.mock`）、 内存警告在
+  阈值以下保持沉默、`policy_effect` 在 `hv_latent` 结果上仍然可用。
+
+### 代码评审（两轮）
+
+- **第 B 轮**（agent）提出 3 个高优先级问题：
+  1.  “重复计算 Bernoulli” — **在数学和反事实实验中被拒绝**。Form-2 分解是正确
+      的；丢掉 Bernoulli 会导致结果大幅偏差。该结论已在文档字符串中阐明。
+  2.  “边际 `U_D` 不服从 Uniform(0,1)” — **在代数上被拒绝**。 `p(U_D|p) = p·U(0,p) + (1-p)·U(p,1) = Uniform(0,1)` 
+      成立。
+  3.  “内存爆炸” — **已接受**；新增 `UserWarning`。
+- **第 C 轮**（agent）对第 B 轮解决方案复审：**无阻塞性问题**。 对文档字符串中
+  积分记号的一个细节问题已在现场修正。
+
+### 设计规范
+
+- `docs/superpowers/specs/2026-04-20-v0910-hv-latent-mte.qmd`
+
+### 非目标（0.9.10）
+
+- `(U_0, U_1, U_D)` 上的完整双变量正态误差结构 — 仅线性可分离。 自然的 0.9.11+
+  扩展。
+- 多工具变量 HV MTE。
+- `u` 上的 GP（仍为 `poly_u` 阶多项式）。
+- Rust Phase 2 — 分支工作。
+
+### 文章表面层第二轮：命名空间修正 + 关键字对齐
+
+补齐由 v0.9.9 首轮别名修正开启的 API 清理线程。 2026-04-20 的调查文章宣称 `sp.matrix_completion`、 
+`sp.causal_discovery`、`sp.mediation`、`sp.evalue_rr`，以及 `sp.policy_tree` 
+/ `sp.dml` 的文章式关键字；这些在本轮前要么解析到了*子模块*， 要么拒绝博客文章
+中的关键字。
+
+#### 新增 — 面向文章的别名
+
+- `sp.matrix_completion(df, y, d, unit, time)` — `sp.mc_panel` 的薄封装， 将 `d → treat` 
+  重命名。覆盖原有模块绑定。
+- `sp.causal_discovery(df, method='notears'|'pc'|'ges'|'lingam', variables=None)` 
+  — 调度器。支持每个后端的原生签名（notears/pc 接受 `variables=`； ges/lingam
+  不接受，因此调度器会先对帧做子集化处理）。
+- `sp.mediation(df, y, d, m, X)` — `sp.mediate` 的文章包装器；覆盖原有模块绑定。
+- `sp.evalue_rr(rr, rr_lower=None, rr_upper=None)` — 为博客文章中记录的形状提
+  供风险比便利函数。
+- `sp.policy_tree` 接受 `d=/treat=`、`X=/covariates=`、 `depth=/max_depth=`。
+  冲突值会抛出 `TypeError`。
+- `sp.dml` 接受 `model_y=` / `model_d=` 作为 `ml_g` / `ml_m` 的别名， 并支持相
+  同的双重命名约定。
+
+#### 加固
+
+- `sp.auto_did` 在 `g` 是非数值队列标签时会立即失败并抛出 `TypeError` （BJS 分
+  支在这种情况下会静默异常）。
+- `AutoDIDResult.__repr__` / `AutoIVResult.__repr__` 现在返回单行摘要 （Jupyter
+  列表结果展示）；调用 `.summary()` 可获取完整排行榜。
+- `statspai.agent.tools._default_serializer` 现在对标量安全 （新增 `_scalar_or_none` 
+  辅助函数）— 能处理 Series 值结果字段， 不再在 JSON 序列化时崩溃。
+
+#### 回退 — 明确的非目标
+
+- 对 `EconometricResults` 新增 `.estimate` / `.se` / `.pvalue` / `.ci` 属性的
+  实验性更改已被*撤回*，原因是回归测试表明它破坏了 `agent/tools.py` 和 `causal_workflow.py`， 
+  这些模块用 `hasattr(r, 'estimate')` 在标量 `CausalResult` 和多系数 `EconometricResults` 
+  之间分派。 `core/results.py` 中有一条说明，记录这些别名故意缺失的原因；跨估
+  计器代码请使用 `.tidy()`。
+
+#### 测试（文章表面层第二轮）
+
+`tests/test_article_aliases_round2.py` 增加 25 个测试，覆盖上述所有情况， 包括
+冲突检测和由第二轮代码评审标出的后端签名分支。
+
+------------------------------------------------------------------------
+
+## \[0.9.9\] - 2026-04-20 — 联合第一阶段 MTE + 与政策相关的权重 + 诚实性清理
+
+补全 v0.9.8 的两个明确后续项（联合第一阶段、与政策相关的权重），并对 MTE 的
+标注做了一次**语义修正** —— 这个问题熬过了两轮代码评审。
+
+### 新增（0.9.9）
+
+- **`sp.bayes_mte(..., first_stage='plugin' | 'joint')`** —— 新增 kwarg。
+  `'plugin'`（默认）保持 v0.9.8 的行为：由 logit MLE 把倾向得分算作固定常数。
+  `'joint'` 把第一阶段 logit 系数放进 PyMC 图内部（`pi_intercept`、`pi_Z`、
+  可选的 `pi_X`），把 `D ~ Bernoulli(sigmoid(pi'W))` 纳入建模，并在随机的
+  倾向得分处计算效应多项式 —— 于是第一阶段的不确定性会传播进返回的曲线。
+  比插入式慢 2–4 倍，但对识别噪声是诚实的。
+
+- **`BayesianMTEResult.policy_effect(weight_fn, label, rope=None)`**
+  （`src/statspai/bayes/_base.py`）—— 用梯形积分在拟合所用的 `u_grid` 上给出
+  `int w(u) g(u) du / int w(u) du` 的后验摘要。配合 `policy_weight_ate()`，
+  它现在与 `.ate` **在数值上完全一致**（同一网格上的梯形积分）—— 测试断言
+  两者在 1e-8 内相等。
+
+- **`sp.policy_weight_*`** —— 四个权重函数构造器
+  （`src/statspai/bayes/policy_weights.py`）：
+
+  - `policy_weight_ate()` —— 均匀权重 = 1。
+  - `policy_weight_subsidy(u_lo, u_hi)` —— `[u_lo, u_hi]` 上的示性函数。
+  - `policy_weight_prte(shift)` —— 围绕平均倾向得分的**风格化**矩形。
+    docstring 开头即声明"这不是教科书上的 Carneiro-Heckman-Vytlacil 2011
+    PRTE"，并给出一段可直接改用的 `scipy.stats.gaussian_kde` 示例，让用户可以
+    用自己的观测倾向样本构造真正的 CHV PRTE。
+  - `policy_weight_marginal(u_star, bandwidth)` —— 通过窄带给出特定倾向得分处
+    的边际 PRTE。
+
+### 语义修正（诚实性清理）
+
+- **标注修正**：v0.9.8 的拟合结果被称为"MTE 曲线"，但结构模型拟合的实际是
+  `g(p) = E[Y|D=1,P=p] - E[Y|D=0,P=p]` —— 即*倾向得分处的处理效应*函数。在
+  Heckman-Vytlacil（2005）的线性可分 + 二元正态假设下，`g(p) = MTE(p)`；在
+  任意异质性下，`g(p)` 只是倾向得分 `p` 处的 LATE 摘要，而非教科书意义上的
+  MTE(u)。模块 docstring 现在以此注意事项开头，方法标签改为
+  `"Bayesian treatment-effect-at-propensity"` 而非 `"Bayesian MTE"`。为保证
+  API 连续性，函数名、结果类名与 `mte_curve` 字段均保持不变 —— 之所以保留
+  "MTE"命名，是因为应用用户会预期并搜索它。
+
+### 性能
+
+- 从 joint 模式中移除了 `pm.Deterministic('p', ...)`。在大 `n` 下，逐次抽样
+  存储每个个体的倾向得分会带来 `O(chains × draws × n)` 的内存开销（例如
+  n=1000、draws=2000、chains=4 时为 64MB）。事后的 ATT/ATU 倾向得分现在由
+  `pi_intercept` / `pi_Z` / `pi_X` 的后验均值重新计算。
+
+### 测试（0.9.9）
+
+- **`tests/test_bayes_mte_policy.py`**（新增，14 项测试）—— 构造器的输入校验
+  （拒绝非法界限、浮点安全的网格）、joint 模式可运行且在设定良好的 DGP 上与
+  plug-in 一致、`policy_effect` 的契约、与 `.ate` 在 1e-8 内的梯形积分一致性、
+  四个权重构造器的顶层导出。
+
+### 代码评审
+
+- 第 A 轮（agent）发现 **4 项**：B1（语义标注错误）、H1（归一化不一致）、
+  H2（joint + ADVI 下内存暴涨）、M1（PRTE 构造器的命名）。
+- 第 B 轮（agent）针对修复做复查，确认**无遗留阻塞项**；其中一项后续问题
+  （H1 修复后测试容差过松）已在发布前就地修正。
+
+### 设计规范（0.9.9）
+
+- `docs/superpowers/specs/2026-04-20-v099-mte-joint-policy-weights.qmd`
+
+### 非目标（0.9.9）
+
+- 完全忠于 H-V 的联合模型（逐个体采样潜变量 `U_D`）—— 仍是未来版本。文档中
+  记为 0.9.10+ 的自然扩展。
+- 带按工具变量 PRTE 权重的多工具变量 MTE。
+- `u` 上的高斯过程曲面（本版本是多项式）。
+- Rust 第二阶段 —— 分支工作。
+------------------------------------------------------------------------
+
+## \[0.9.8\] - 2026-04-20 — 贝叶斯边际处理效应 + Pathfinder / SMC 后端
+
+补全 v0.9.7 非目标清单中明确排入下一批的两项。发布了 **Python 因果推断
+技术栈中的第一个贝叶斯边际处理效应估计量**，并为采样器分发扩展了两个新后端。
+
+### 新增（0.9.8）
+
+- **`sp.bayes_mte(data, y, treat, instrument, covariates=None, u_grid=..., poly_u=2, ...)`**（`src/statspai/bayes/mte.py`）—— 通过 PyMC 实现的
+  Heckman-Vytlacil（2005）边际处理效应。返回 `BayesianMTEResult`，含：
+
+  - `.mte_curve` —— 在用户提供（或默认 19 点）的"接受处理的倾向" `U_D`
+    网格上的 DataFrame：列包括 `u`、`posterior_mean`、`posterior_sd`、
+    `hdi_low`、`hdi_high`、`prob_positive`。
+  - `.ate`、`.att`、`.atu` —— MTE 在总体 / 处理组 / 未处理组区域上的积分。
+  - `.plot_mte()` —— 带 HDI 带的 MTE 曲线快速 matplotlib 可视化。
+
+  使用插入式的 logit 第一阶段（与 `bayes_iv` 相同的务实捷径）：贝叶斯层只
+  覆盖 MTE 多项式的系数。在正确设定第一阶段的前提下渐近正确；明确列为非目标
+  的是完整的「第一阶段 + MTE」联合后验（排在 0.9.9+）。
+
+- **`inference='pathfinder'`** —— 新的采样器后端，路由到 PyMC 的
+  `pm.fit(method='fullrank_advi')`。它以相近的速度捕捉参数之间的成对协方差
+  （平均场 ADVI 会漏掉这部分）。这是为 PyMC 的 `pmx.fit` 稳定下来之前预留的
+  占位实现；全秩 ADVI 与之精神一致。
+
+- **`inference='smc'`** —— 新的采样器后端，路由到 PyMC 的 `pm.sample_smc`。
+  序贯蒙特卡洛；在单峰后验上比 NUTS 慢，但对 NUTS 会卡住的多峰后验更稳健。
+  与 ADVI / Pathfinder 不同，SMC 返回多链 trace，因此 R-hat 仍然有意义。
+
+- **`BayesianMTEResult`** —— 顶层导出（`sp.BayesianMTEResult`）。继承
+  `BayesianCausalResult`，并新增 `mte_curve`、`u_grid`、`ate`、`att`、`atu`、
+  `.plot_mte()`。
+
+- **汇总输出**现在能识别完整的采样器菜单：
+
+  - NUTS / SMC：R-hat 有意义；> 1.01 时标记告警。
+  - ADVI / Pathfinder：R-hat 只是变分意义下的量，会照此标记，并附上一句
+    明确的提示："如需校准良好的不确定性，请使用 NUTS 或 SMC"。
+
+### 设计规范（0.9.8）
+
+- `docs/superpowers/specs/2026-04-20-v098-bayes-mte-samplers.qmd`
+
+### 测试（0.9.8）
+
+- **`tests/test_bayes_mte.py`**（9 项测试）—— API 面、平坦 MTE 的还原、单调
+  MTE 斜率的还原、自定义 `u_grid`、`poly_u=1` 路径、协变量接线、顶层导出、
+  缺失列与处理变量非二值的校验。
+- **`tests/test_bayes_advi.py`**（+5 项测试）—— `bayes_iv` 与 `bayes_did` 上
+  的 Pathfinder、`bayes_iv` 与 `bayes_did` 上的 SMC、Pathfinder 在
+  `summary()` 中的注意事项。
+
+### 非目标（0.9.8，明确列出）
+
+- 完整的「第一阶段 + MTE」联合后验（把第一阶段不确定性传播进 `tau(u)`）。
+  v0.9.8 选择插入式倾向：在正确设定第一阶段时渐近正确；下一个版本可以再加
+  联合模型。
+- 多工具变量 MTE —— 需要与政策相关的加权（Carneiro-Heckman-Vytlacil 2011），
+  超出本版范围。
+- 非线性 MTE 曲面（对 `u` 做 GP）—— 本版只支持 `poly_u` 阶多项式。
+- Rust 第二阶段 —— 仍留在 `feat/rust-hdfe` 分支。
+------------------------------------------------------------------------
+
+## \[0.9.7\] - 2026-04-20 — 异质性效应贝叶斯 IV + ADVI 开关
+
+补全 v0.9.6「诚实汇报」清单上排队的三项中的两项。第三项（贝叶斯聚束）被
+**明确否决** —— 见下面的"非目标"一节。
+
+### 新增（0.9.7）
+
+- **`sp.bayes_hte_iv(data, y, treat, instrument, effect_modifiers, ...)`**
+  （`src/statspai/bayes/hte_iv.py`）—— 带"按协变量线性的 CATE"模型的贝叶斯
+  IV。返回 `BayesianHTEIVResult`，包含：
+
+  - 平均 LATE（`tau_0`，在修饰变量均值处）及其后验 + HDI。
+  - `.cate_slopes` DataFrame —— 每个效应修饰变量一行，含后验均值、SD、HDI
+    与 `prob_positive`。
+  - `.predict_cate(values: dict) -> dict` —— 在用户指定的修饰变量取值处的
+    CATE 后验摘要。
+
+  模型：
+
+  ```         
+  D = pi_0 + pi_Z' Z + pi_X' X + v
+  tau(M) = tau_0 + tau_hte' (M - M_bar)
+  Y = alpha + tau(M) * D + beta_X' X + rho * v_hat + eps
+  ```
+
+  控制函数的写法使 NUTS 采样保持可解。支持多工具变量 + 多修饰变量 + 外生
+  控制变量。
+
+- 在所有贝叶斯估计器 —— `bayes_did`、`bayes_rd`、`bayes_iv`、
+  `bayes_fuzzy_rd` 以及新的 `bayes_hte_iv` —— 上新增
+  **`inference='nuts' | 'advi'`** 参数。在 `'advi'` 下，估计器走
+  `pm.fit(method='advi')`，以平均场校准性为代价换取 10–50× 的加速。在 ADVI
+  模式下 `rhat` 报告为 `NaN`（对变分近似没有意义）。
+
+  一个共享的 `_sample_model` 辅助函数现在统管采样分发，因此未来的后端
+  （`'smc'`、`'pathfinder'`）可以无缝插入。
+
+- **`BayesianHTEIVResult`** —— 顶层导出（`sp.BayesianHTEIVResult`）。在
+  `BayesianCausalResult` 之上扩展出 `cate_slopes`、`effect_modifiers` 与
+  `predict_cate(...)`。
+
+### 设计规范（0.9.7）
+
+- `docs/superpowers/specs/2026-04-20-v097-bayes-hte-iv-advi.qmd`
+
+### 测试（0.9.7）
+
+- **`tests/test_bayes_hte_iv.py`**（8 项测试）—— API 面、异质性 DGP 上平均
+  LATE 的还原、斜率的还原、同质性 DGP 上零斜率的覆盖、`predict_cate` 的
+  结构、多修饰变量拟合、输入校验。
+- **`tests/test_bayes_advi.py`**（10 项测试）—— 五个贝叶斯估计器上 ADVI 均可
+  运行、后验均值有限、`model_info['inference']` 报告正确、每个估计器在非法
+  的 inference 取值时都会报错（对 5 个函数参数化）。
+
+### 非目标（0.9.7，明确否决）
+
+- **贝叶斯聚束**（`sp.bayes_bunching`）—— 经评审后否决。Kleven / Saez /
+  Chetty 的聚束估计量是*结构性*的公共财政模型，其识别依赖于无法跨折点类型
+  泛化的效用 / 最优化参数化、领域特定且难以合理默认化的偏好异质性先验，
+  且其拟合结果的可解释性完全受限于结构模型本身。这与本包"面向 Agent 的
+  一行代码"主旨相悖。频率学派的 `sp.bunching` 维持现状。只有在出现契合面向
+  Agent 工作流的具体用户场景时，我们才会重新考虑。
+
+- MTE / 依从者异质性 IV —— 排在 0.9.8+。
+
+- ADVI 之外的其他变分推断后端（Pathfinder、SMC）—— `_sample_model` 现在
+  已可扩展，但这些后端不进入本版本。
+
+- Rust 第二阶段 —— 在 cibuildwheel 矩阵全绿之前留在 `feat/rust-hdfe` 分支。
+------------------------------------------------------------------------
+
+## \[0.9.6\] - 2026-04-20 — 贝叶斯 IV + 模糊 RD + 按学习器的 Optuna + Rust 分支 + g-方法系列
+
+本次发布打包了同一天落地的两个独立冲刺：
+
+### 冲刺 A —— 贝叶斯深度 + 调参粒度 + Rust 分支
+
+1.  贝叶斯覆盖深度 —— 新增 `sp.bayes_iv` 与 `sp.bayes_fuzzy_rd`。
+2.  Optuna 粒度 —— `sp.auto_cate_tuned` 现在支持 `tune='nuisance'`
+    （v0.9.5 行为）、`tune='per_learner'` 与 `tune='both'`。
+3.  Rust 工作流 —— 开出 `feat/rust-hdfe` 分支并搭好 Cargo crate 骨架；
+    `main` 保持不含 maturin。
+
+### 冲刺 B —— G-方法系列、近端因果、主层分层
+
+针对 2026-04-20 差距表做的一次因果推断覆盖审计的收尾：发布了 DML IIVM、
+g-计算、前门估计量、MSM、干预式中介分析，以及两个新的顶层模块
+**近端因果推断（Proximal Causal Inference）** 与 **主层分层（Principal
+Stratification）**。自审之后，第二轮又打磨了权重语义、bootstrap 诊断、
+蒙特卡洛向量化，并对 DML 内部做了完整重构（四个按模型划分的文件共享
+`_DoubleMLBase`）。
+
+### 新增
+
+- **`sp.bayes_iv(data, y, treat, instrument, covariates=None, ...)`**
+  （`src/statspai/bayes/iv.py`）—— 通过控制函数形式实现的贝叶斯线性 IV。
+  第一阶段 OLS 残差作为外生性校正项进入结构方程，因此 LATE 的后验在渐近意义
+  上等于 2SLS，同时在 PyMC 中依然极易采样。接受单个工具变量或工具变量列表。
+  HDI 会随着工具变量变弱而自然变宽（没有"F < 10"的断崖 —— 后验会自发地为
+  识别强度定价）。
+
+- **`sp.bayes_fuzzy_rd(data, y, treat, running, cutoff, ...)`**
+  （`src/statspai/bayes/fuzzy_rd.py`）—— 通过"对 Y 的 ITT"与"对 D 的 ITT"
+  两个局部多项式的联合 + LATE 的确定性比率实现的贝叶斯模糊 RD。在部分依从下，
+  后验继承两个噪声通道（Wald 比率后验）；在完全依从下，它退化为精确 RD 的结果。
+  非二值的接受处理会以清晰报错被拒绝。`model_info` 报告
+  `first_stage_mean` / `first_stage_sd`，便于用户直观检查依从情况。
+
+- **`sp.auto_cate_tuned(..., tune='nuisance' | 'per_learner' | 'both')`**
+  —— 新的 `tune` 开关在三种模式间切换：
+
+  - `'nuisance'`（默认，v0.9.5 行为）：按留出集上的 R-loss 调优共享的结果
+    / 倾向 GBM。
+  - `'per_learner'`：每个学习器最终阶段的 CATE 模型各自独立地按留出集
+    R-loss 调优；冗余模型保持默认。会填充
+    `model_info['per_learner_params']` 与 `['per_learner_r_loss']`；最佳
+    学习器调优后的 CATE 模型会作为提示传给 `auto_cate`。
+  - `'both'`：先调冗余模型，再在该冗余之上按学习器调 CATE。
+
+  同时新增 `n_trials_per_learner`（默认 `max(5, n_trials//3)`）与
+  `per_learner_search_space`。选择规则的说明文本现在会记录本次实际运行的是
+  哪种调优模式。
+
+- **`feat/rust-hdfe` 分支**（已推送，未合并）—— Cargo crate 骨架，以及为
+  日后 `group_demean` 内核准备的 PyO3 桩。`main` 保持不含 maturin，因此
+  `pip install statspai` 不受影响。
+
+### 设计规范
+
+- `docs/superpowers/specs/2026-04-20-v096-bayes-iv-fuzzyrd-perlearner.qmd`
+
+### 测试
+
+- **`tests/test_bayes_iv.py`**（8 项测试）—— API、顶层导出、强 IV 下的还原、
+  弱 IV 时 HDI 变宽、多工具变量拟合、协变量接线、输入校验、tidy/glance 的
+  形状。
+- **`tests/test_bayes_fuzzy_rd.py`**（7 项测试）—— API、部分依从下的还原、
+  完全依从下与精确 RD 的等价、带宽收窄样本、报告第一阶段诊断、拒绝非二值的
+  接受处理。
+- **`tests/test_auto_cate_tuned.py`**（+5 项测试）—— 拒绝非法的 `tune`
+  模式、`'per_learner'` 会填充参数、per_learner 模式下不泄漏冗余模型的元数据、
+  `'both'` 模式覆盖两条通道、`selection_rule` 提及按学习器调优。
+
+### 非目标（已推迟）
+
+- 聚束的贝叶斯估计量（Kleven 式属于结构化 / 宏观取向，与面向 Agent 的 API
+  不契合）。排在 0.9.7。
+- 异质性效应的贝叶斯 IV —— 本版本只做 LATE。
+- 变分推断采样器（ADVI）—— 只用 NUTS。
+- Rust 内核合并进 `main` —— 在 cibuildwheel 矩阵全绿之前留在
+  `feat/rust-hdfe`。
+
+### 新增（冲刺 B）
+
+- **`sp.dml(..., model='iivm', instrument=Z)`**（`src/statspai/dml/iivm.py`）
+  —— 用于 LATE 的交互型 IV（D 与 Z 均为二值）DML 估计量。使用两个双重稳健
+  得分 `(ψ_a, ψ_b)` 之比的高效影响函数形式，配合 Neyman 正交的交叉拟合；
+  标准误通过对该比值做 delta 方法得到。弱工具守卫在 `|E[ψ_b]| ≈ 0` 时抛出
+  `RuntimeError`。类形式：`sp.DoubleMLIIVM`。
+
+- **`sp.DoubleMLPLR / DoubleMLIRM / DoubleMLPLIV / DoubleMLIIVM`**
+  （`src/statspai/dml/*.py`）—— 每个 DML 模型系列现在各占一个文件，
+  `dml/_base.py` 中的共享 `_DoubleMLBase` 负责校验、默认学习器（按模型自动
+  选择分类器还是回归器）、交叉拟合与 `CausalResult` 的构造。旧的
+  `sp.DoubleML(model=...)` 门面仍然可用。
+
+- **`sp.g_computation(data, y, treat, covariates, estimand='ATE'|'ATT'|'dose_response', ...)`**（`src/statspai/inference/g_computation.py`）
+  —— Robins（1986）的参数化 g-公式 / 标准化估计量。支持二值处理（ATE、ATT）
+  与连续处理的剂量-反应网格。默认使用 OLS 结果模型，也可通过 `ml_Q=` 传入
+  任意兼容 sklearn 的学习器。非参数 bootstrap 标准误，并用 NaN 追踪失败
+  （`model_info['n_boot_failed']`）—— 取代了此前会缩小标准误的静默点估计
+  回退。
+
+- **`sp.front_door(data, y, treat, mediator, covariates=None, mediator_type='auto', integrate_by='marginal'|'conditional', ...)`**（`src/statspai/inference/front_door.py`）
+  —— Pearl（1995）前门调整估计量。二值中介变量用闭式求和；连续中介变量则
+  对高斯条件密度做蒙特卡洛积分。暴露两种识别变体：
+  `integrate_by='marginal'`（Pearl 95 的聚合形式）与 `'conditional'`
+  （Fulcher 等 2020 的广义前门）。bootstrap 标准误同样用 NaN 追踪失败。
+
+- **`sp.msm(data, y, treat, id, time, time_varying, baseline=None, exposure='cumulative'|'current'|'ever', family='gaussian'|'binomial', trim=0.01, ...)`**（`src/statspai/msm/`）
+  —— 通过稳定化 IPTW 实现的 Robins-Hernán-Brumback（2000）边际结构模型。
+  处理时变处理变量 + 时变混杂因素（二值或连续）。对暴露史做加权的混合回归，
+  并在个体层面给出聚类稳健的 CR1 三明治标准误。`sp.stabilized_weights(...)`
+  作为独立辅助函数暴露，供只想要权重、不想拟合结果模型的用户使用。
+
+- **`sp.mediate_interventional(data, y, treat, mediator, covariates=None, tv_confounders=None, ...)`**（`src/statspai/mediation/mediate.py`）
+  —— VanderWeele、Vansteelandt & Robins（2014）的干预式（非）直接效应。
+  在存在由处理引起的"中介-结果"混杂因素（`tv_confounders=[...]`）时仍可识别，
+  而自然的（非）直接效应在此时不可识别。蒙特卡洛积分已完全向量化（比朴素的
+  逐观测循环快约 100 倍）。
+
+- **`sp.proximal(data, y, treat, proxy_z, proxy_w, covariates=None, n_boot=0, ...)`**（`src/statspai/proximal/`）
+  —— 近端因果推断（Tchetgen Tchetgen 等 2020；Miao、Geng & Tchetgen
+  Tchetgen 2018），通过结果桥函数上的线性 2SLS 实现。在存在未观测混杂因素
+  时，只要有两个代理变量（处理侧的 `Z` 与结果侧的 `W`），就能识别 ATE。
+  会报告代理方程的第一阶段 F 统计量，并在 F < 10 时告警。可通过
+  `n_boot=` 选择非参数 bootstrap 标准误。
+
+- **`sp.principal_strat(data, y, treat, strata, covariates=None, method='monotonicity'|'principal_score', ...)`**（`src/statspai/principal_strat/`）
+  —— 主层分层（Frangakis & Rubin 2002）。`method='monotonicity'` 用
+  Angrist-Imbens-Rubin 的依从分解来识别依从者的 PCE（即 LATE），并返回
+  Zhang-Rubin（2003）对"始终存活者"SACE 的锐利界限。
+  `method='principal_score'` 实现 Ding & Lu（2017）的主层得分加权，在主层
+  可忽略性假设下点识别"始终接受者 / 依从者 / 从不接受者"的 PCE。返回专门的
+  `PrincipalStratResult`，含 `strata_proportions`、`effects`、`bounds`。
+
+- **`sp.survivor_average_causal_effect(data, y, treat, survival, ...)`**
+  —— 围绕 `principal_strat(method='monotonicity')` 的友好封装，用于经典的
+  "因死亡而截断"问题。报告 SACE 的中点 + 端点并集的置信区间。
+
+### 变更（冲刺 B）
+
+- **MSM 的二项结果分布族**：`_weighted_logit_cluster` 取代了此前
+  `statsmodels.GLM(freq_weights=w)` 的调用（后者把权重当作整数重复计数），
+  改为手写的 IRLS，使用概率权重语义。这与 Cole & Hernán（2008）以及 Stata
+  中 IPTW 的 `pweight` 约定一致。
+
+- **bootstrap 失败报告**：`g_computation`、`mediate_interventional`、
+  `front_door` 与 `proximal` 现在把失败的 bootstrap 重复保留为 `NaN`，发出
+  带失败计数与首条错误信息的 `RuntimeWarning`，并在 `model_info` 中记录
+  `n_boot_failed` / `n_boot_success` / `first_bootstrap_error`。若成功次数
+  少于两次，会抛出干净的 `RuntimeError`，而不是静默地低估标准误。
+
+- **`mediate_interventional` 的 MC 循环**：原先 `O(n × n_mc)` 的 Python
+  推导式被闭式向量化取代，利用了结果模型在"由处理引起的混杂块"
+  （`X_tv`）上的 OLS 线性性。对个体的外层期望坍缩为
+  `β_tv · mean(X_tv)`，运行时间降至 `O(n_mc + n)`，在参照配置上实测约
+  100× 加速（n=800、n_boot=200、n_mc=300 从约 4 秒降到约 0.04 秒）。
+
+- **`sp.dml` 内部布局**：原先 466 行的单类 `dml/double_ml.py` 被拆成五个
+  文件（`_base.py` + `plr.py` + `irm.py` + `pliv.py` + `iivm.py`），每个文件
+  各自负责一个 Neyman 正交得分及其校验。公开的 `dml()` 函数与 `DoubleML`
+  类均不变；新增的按模型划分的类现在可以直接导入。
+
+- 带协变量与连续中介变量的 `sp.front_door` 增加了 `integrate_by`（见"新增"）。
+
+### 测试（冲刺 B）
+
+- **`tests/test_dml_iivm.py`**（5 项测试）—— 单边不依从 DGP 上 LATE 的还原、
+  显著性、D/Z 必须二值的校验、`model_info` 字段。
+- **`tests/test_dml_split.py`**（5 项测试）—— 直接调用类与分发器结果相同、
+  旧的 `DoubleML` 门面、PLIV 拒绝多工具变量列表。
+- **`tests/test_g_computation.py`**（5 项测试）—— ATE / ATT / 剂量-反应
+  曲线在容差内还原、校验类报错。
+- **`tests/test_front_door.py`**（4 项测试）—— 在含未观测混杂的 DGP 上，
+  连续 M 与二值 M 的 ATE 还原，且严格比朴素 OLS 更接近真值。
+- **`tests/test_front_door_integrate_by.py`**（3 项测试）—— marginal 与
+  conditional 两种变体都能还原真值，非法取值被拒绝。
+- **`tests/test_msm.py`**（5 项测试）—— 累积暴露斜率的还原、稳定化权重的
+  形状 / 均值、`exposure='ever'` 要求处理变量为二值、权重诊断已暴露。
+- **`tests/test_mediate_interventional.py`**（4 项测试）—— IIE + IDE 的
+  可加性分解、总效应的符号、D 必须二值的校验。
+- **`tests/test_proximal.py`**（6 项测试）—— 线性桥函数的 ATE 还原、严格
+  优于 OLS、阶条件检查、协变量兼容性、bootstrap 标准误路径、报告第一阶段 F。
+- **`tests/test_principal_strat.py`**（7 项测试）—— 单调性下的 LATE、
+  各层比例、有效的 SACE 界限、带信息量 X 的主层得分方法、输入校验、
+  SACE 辅助函数。
+
+### 说明（冲刺 B）
+
+- 没有新增必需依赖。所有新增内容只用 NumPy / pandas / scipy / scikit-learn
+  （statsmodels 为可选）。
+- 全新模块的测试套件：44 项新测试通过；现有的 28 项 DML + 中介回归测试仍然
+  通过；全量收集报告 1960 项测试，本次冲刺未引入任何导入错误。
+------------------------------------------------------------------------
+
+## \[0.9.5\] - 2026-04-20 — 贝叶斯因果 + Optuna 调参的 CATE + Rust 验证
+
+本次发布补上了 v0.9.4 发布后回顾（第 8 节「认怂」清单）中的三项：
+
+1.  **贝叶斯因果** —— `sp.bayes_did` + `sp.bayes_rd`（PyMC）。
+2.  **ML CATE 调参** —— `sp.auto_cate_tuned`（Optuna）。
+3.  **Rust HDFE 内核** —— 已发布设计规范与基准框架；真正的 Rust crate 推迟
+    到 1.0，在专门的分支上进行（任何会让 `pip install` 依赖 `maturin` 的
+    改动，都要等到完整的跨平台 wheel 矩阵全绿之后）。
+
+### 新增
+
+- **`sp.bayes_did(data, y, treat, post, unit=None, time=None, ...)`**
+  （`src/statspai/bayes/did.py`）—— 通过 PyMC 实现的贝叶斯双重差分。没有面板
+  索引时走 2×2；给定 `unit` 和/或 `time` 时使用层次高斯随机效应。NUTS 采样器、
+  可配置的先验，以及用于"实际等价"后验概率的 `rope=(lo, hi)`。返回
+  `BayesianCausalResult`，含后验均值/中位数/SD、95% HDI、`prob_positive`、
+  `rhat`、`ess`，以及 `.trace` 上完整的 ArviZ `InferenceData` 供下游绘图。
+
+- **`sp.bayes_rd(data, y, running, cutoff, bandwidth=None, poly=1, ...)`**
+  （`src/statspai/bayes/rd.py`）—— 带局部多项式（阶数 ≥ 1）与跳跃处正态先验
+  的贝叶斯精确断点回归。带宽默认为 `0.5 * std(running)`。
+
+- **`sp.BayesianCausalResult`** —— 与 `CausalResult` 同级的类型，提供 broom
+  风格的 `.tidy()` / `.glance()` / `.summary()`，以及贝叶斯特有字段
+  （`hdi_lower`、`hdi_upper`、`prob_positive`、`prob_rope`、`rhat`、`ess`）。
+  它能无缝接入与频率学派估计量相同的、面向 Agent 的
+  `pd.concat([r.tidy() for r in results])` 工作流。
+
+- **`sp.auto_cate_tuned(..., n_trials=25, timeout=None, search_space=None)`**
+  （`src/statspai/metalearners/auto_cate_tuned.py`）—— 用 Optuna 的
+  `TPESampler` 搜索冗余 GBM 的超参数（结果模型与倾向模型分开搜），每个试验
+  以共享冗余下留出集的 R-loss 评分。最佳试验得到的模型会交给
+  `sp.auto_cate`；胜出者的 `model_info['tuned_params']` 记录所选超参数，
+  `['n_trials']` 记录搜索预算。这补上了相对 econml「在做 CATE 之前先对冗余
+  模型做交叉验证」的易用性差距。
+
+- **`sp.fast.hdfe_bench(n_list, n_groups, repeat, seed, atol)`**
+  （`src/statspai/fast/bench.py`）—— HDFE 分组去均值内核的基准框架。在相同
+  DGP 上为 NumPy、Numba 以及（未来的）Rust 路径计时，并断言相对 NumPy 参照
+  实现的正确性在 1 × 10⁻¹⁰ 以内。不可用的后端会被记录下来而不是让程序崩溃，
+  因此同一套框架既能在缺少 Numba 的 CI 环境里跑，也能在装了未来 Rust wheel
+  的开发机上跑。
+
+- **可选安装 extras**：`pip install "statspai[bayes]"` 会拉取
+  `pymc >= 5` + `arviz >= 0.15`；`pip install "statspai[tune]"` 会拉取
+  `optuna >= 3`。缺少任何一个时，核心的 `import statspai` 都能正常工作；
+  相应的估计器会在调用时抛出干净的 `ImportError`，并附上安装命令。
+
+### 设计文档
+
+- `docs/superpowers/specs/2026-04-20-v095-bayes-optuna-rust-spike.qmd` ——
+  本次发布的完整规范。
+- `docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd` —— Rust HDFE
+  移植的分阶段计划（crate 布局、PyO3 FFI 接口、cibuildwheel 矩阵、优雅降级
+  契约）。
+
+### 测试
+
+- **`tests/test_bayes_did.py`**（11 项测试）—— 2×2 + 面板下的还原、
+  `prob_positive` 的校准性、HDI 覆盖、输入校验、ROPE、tidy/glance 的形状。
+- **`tests/test_bayes_rd.py`**（9 项测试）—— 精确 RD 的还原、零效应时 HDI
+  跨过 0、带宽收窄局部样本、`poly=2` 可运行、校验类报错。
+- **`tests/test_auto_cate_tuned.py`**（7 项测试）—— API、`n_trials` 生效、
+  ATE 还原、自定义搜索空间生效、拒绝非法处理变量。
+- **`tests/test_fast_bench.py`**（5 项测试）—— 框架返回 `HDFEBenchResult`、
+  dry-run 在 5 秒内完成、Numba 与 NumPy 在 1e-10 内一致、不可用的路径被记录
+  而非崩溃、摘要字符串。
+
+### 非目标（明确列出）
+
+- **变分推断**（`pymc.fit` ADVI）—— 0.9.5 只用 NUTS。
+- **贝叶斯模糊 RD、IV、聚束** —— 推迟到 0.9.6+。
+- **Rust crate 本身** —— 在带完整 `cibuildwheel` 矩阵的专门分支上发布；
+  在没有该矩阵的情况下把 `maturin` 加进 `pyproject.toml`，会让部分用户的
+  `pip install` 直接失败。
+------------------------------------------------------------------------
+
+## \[0.9.4\] - 2026-04-20 — `sp.auto_cate` + 严格识别
+
+本次发布兑现了 0.9.3 发布后回顾
+（`社媒文档/4.20-升级说明/StatsPAI-0.9.3之后的一周…`）中的两项具体承诺：
+
+1. **第 5 节承诺**：为 `sp.check_identification` 补上*"下一步打算加
+   `strict_mode=True`"*。以 `strict=True` 加上 `sp.IdentificationError`
+   异常交付。
+2. **第 8 节差距**：*"ML CATE 的调度不如 econml。"* 以 `sp.auto_cate()`
+   交付 —— 一行代码的多学习器竞赛，配诚实的 Nie-Wager R-loss 评分与 BLP
+   校准。
+
+### 新增
+
+- **`sp.auto_cate(data, y, treat, covariates, learners=('s','t','x','r','dr'))`**
+  （`src/statspai/metalearners/auto_cate.py`，+400 行）—— 在共享的交叉拟合
+  冗余之上让五个元学习器同场竞赛，用留出预测 + Nie-Wager R-loss 给每个学习器
+  打分，对各自跑 Chernozhukov-Demirer-Duflo-Fernández-Val 的 BLP 校准检验，
+  并返回 `AutoCATEResult`，含：
+
+  - `.leaderboard` —— 按 R-loss 排序，逐学习器给出 ATE、SE、CI、BLP
+    β₁/β₂、CATE 的 std/IQR；
+  - `.best_learner` / `.best_result` —— 按最低的留出 Nie-Wager R-loss 决出
+    胜者；BLP β₁/β₂ 作为诊断量列在排行榜中，而**不**作为选择门槛（在此
+    参数化下 β₁ 以 Y 为单位就等于 ATE，因此不存在天然的"β₁ ≈ 1"门槛）；
+  - `.results` —— 每个学习器完整的拟合 `CausalResult`；
+  - `.agreement` —— 各学习器**样本内** CATE 向量的 Pearson-ρ 矩阵（快速检查
+    模型依赖性的健全性检验）；
+  - `.summary()` —— 可打印的排行榜 + 一致性表格。
+
+  Python 中第一个带诚实留出评分的统一 CATE 学习器竞赛。`econml` 的多元学习器
+  流水线没有打包进单次调用；`causalml` 的 BaseMetaLearner 对比不对每个学习器
+  跑 BLP 校准。
+
+- **`sp.check_identification(..., strict=True)`** —— 当报告的结论为
+  `'BLOCKERS'` 时抛出 `sp.IdentificationError`。异常对象在 `.report` 上携带
+  完整报告，便于事后排查。默认值仍是 `strict=False`（非破坏性）。
+
+- **`sp.IdentificationError`** —— 新的异常类型，已在顶层导出。
+
+- **`sp.check_identification` 中的 IV 第一阶段强度检查**
+  （`_check_iv_strength`）—— 由第一阶段 OLS
+  `treatment ~ 截距 + 协变量 + 工具变量` 算得（在计算工具变量的 F 之前先做
+  协变量的偏投影，因此存在控制变量时所报告的 F 与 Staiger-Stock 定义一致）。
+  F < 5 标记为 `blocker`，F < 10 为 `warning`（Staiger-Stock 1997），
+  F ∈ \[10, 30) 为 `info`。仅在用户提供了 `instrument` 时触发。
+
+### 测试
+
+- **`tests/test_auto_cate.py`**（13 项测试）—— API 面、排行榜形状、常数效应
+  DGP 上的 ATE 还原、正效应 DGP 上 ATE 全为正、学习器子集、拒绝非法学习器、
+  选择规则说明、一致性矩阵、`CausalResult` 的委托（`.tidy()`、`.glance()`）、
+  自定义模型覆盖、摘要字符串、顶层 `sp.*` 可用性、异质性 DGP 上的 CATE
+  离散度。
+- **`tests/test_check_identification.py`**（+5 项测试）—— `strict=True` 在
+  阻塞项上抛出、容忍警告、默认的非严格行为不变、`sp.IdentificationError`
+  顶层导出、弱工具被标记、强工具不被标记。
+
+### 设计
+
+- 发布的规范：`docs/superpowers/specs/2026-04-20-v094-auto-cate-strict-id-design.qmd`。
+
+### 非目标（推迟到 0.9.5+）
+
+- `auto_cate` 内的 Optuna 超参数搜索 —— 目前用户要么接受提升树的默认参数，
+  要么通过 `outcome_model=` / `propensity_model=` / `cate_model=` 传入预先
+  调好的估计器。
+- 贝叶斯 `sp.bayes_did` / `sp.bayes_rd` —— 已公布为 0.9.5 的预览线。
+- Rust HDFE 内层内核 —— 仍是第 8 节的未决项。
+------------------------------------------------------------------------
+
+## \[Unreleased\] — 0.9.3 发布后的缺陷修复
+
+在 0.9.3 的端到端冒烟测试中暴露了四个用户报告的缺陷。全部已在 `main` 上
+修复，不提升版本号（等之后的补丁版本再发布）。
+
+### 修复
+
+- **`sp.use_chinese()` 在 Linux 上失败**（`plots/themes.py`）—— 自动探测的
+  候选列表只覆盖到 macOS 字体加上 `Noto Sans CJK SC` 与
+  `WenQuanYi Micro Hei`，因此装了 `fonts-noto-cjk`（默认只带
+  `Noto Sans CJK JP/TC/KR`）或 `fonts-wqy-zenhei`（`WenQuanYi Zen Hei`）的
+  Linux/Docker 主机会拿到空返回，外加一条"无中文字体"警告。现在优先级列表
+  按平台分段（macOS → Windows → Linux → 跨平台的思源），四种 Noto CJK 区域
+  变体全部列出，并加入子串回退（`CJK`、`Han Sans`、`Han Serif`、
+  `WenQuanYi`、`Heiti`、`Ming`）以覆盖自定义 / 改名后的构建。警告信息现在
+  会给出确切的 `apt install fonts-noto-cjk fonts-wqy-zenhei` 配方。
+
+- **`sp.regtable(...)` 在 REPL/Jupyter 中打印两次**
+  （`output/regression_table.py`、`output/estimates.py`）—— `regtable()`、
+  `mean_comparison()` 与 `esttab()` 各自在内部调用 `print(result)` 之后再
+  返回结果，而 REPL/Jupyter 会通过 `__repr__` / `_repr_html_` 再把结果显示
+  一遍。这三处内部 print 已全部移除；显示现在走标准的 Python 显示协议。
+
+  **行为变更**：依赖自动打印副作用的脚本必须改为 `print(sp.regtable(...))`。
+  Jupyter 与交互式 REPL 不受影响。
+
+- **`sp.regtable(..., output="latex")` 被静默忽略**
+  （`output/regression_table.py`）—— `output=` 参数此前只控制 Word/Excel 的
+  警告分支；`__str__` 永远渲染为纯文本。`RegtableResult` 与
+  `MeanComparisonResult` 现在会保存 `_output`，并在 `__str__` / `__repr__`
+  中通过 `_render(fmt)` 在 `{text, latex, tex, html, markdown, md}` 上分发。
+  Jupyter 的 `_repr_html_` 仍始终返回 HTML。非法的 `output=` 取值现在抛出
+  `ValueError`，而不是静默回退。
+
+- **`sp.did()` 的 `treat=` 列语义容易被错配**（`did/__init__.py`）—— 在错层
+  设计下，该列必须存放每个单位的**首次接受处理的时期**（从未接受处理 =
+  `0`，**不是** `1`）；但手上已有 0/1 `treated` 列的用户会习惯性地直接传
+  进去，从而得到毫无意义的估计。docstring 现在带明确的警示框，并给出经过
+  验证的、用于构造 `first_treat` 的 pandas 惯用写法
+  （`.loc[treated==1].groupby('id')['year'].min()` + `.map` + `.fillna(0)`），
+  它能正确广播到处理前的各行。
+
+### 新增
+
+- 文档澄清：`regtable(output=...)` 控制的是 `str(result)`，而
+  `regtable(filename=...)` 按文件扩展名分发 —— 两者可以不一致，用户应传入
+  匹配的值。
+- 对 `regtable()` / `mean_comparison()` 的输入校验会拒绝未知的 `output=`
+  取值，并给出列出合法选项的 `ValueError`。
+
+### 测试
+
+`tests/test_v093_bugfixes.py` —— 15 项回归测试，覆盖全部四个缺陷加上新的
+校验。全量套件：1655 项通过、4 项跳过、0 回归。
+------------------------------------------------------------------------
+
+## \[0.9.3\] - 2026-04-19 — 随机前沿 + 多层模型 + GLMM + 计量三支柱
+
+**概览。** 本次发布打包了四项同时推进的深度重构，外加一处作者元数据修正：
+
+1.  **随机前沿分析** —— `sp.frontier` / `sp.xtfrontier` 重写至 Stata/R 水准，
+    并修复一处关键的正确性缺陷。
+2.  **多层 / 混合效应** —— `sp.multilevel` 重写至 lme4/Stata 水准。
+3.  **GLMM 加固** —— AGHQ（`nAGQ>1`）外加三个新分布族（Gamma、负二项、
+    有序 Logit），以及跨族可比的 AIC。
+4.  **计量三支柱** —— 三个新的 P0 支柱：DML-PLIV、Mixed Logit、IV-QR。
+5.  **作者署名**修正为 `Biaoyue Wang`。
+
+⚠️ **关键正确性修复** —— `sp.frontier` 在所有此前版本（0.9.2 及更早）中
+都潜藏着 Jondrow 后验的符号错误。效率得分被系统性偏误；正态-指数路径还会
+对单位效率返回 NaN。**请重跑此前所有的前沿分析。** 详见下文。
+
+------------------------------------------------------------------------
+
+### 随机前沿分析重构
+
+发布重点：`statspai.frontier`。此前实现是一个 270 行的单文件、只有一个函数，
+覆盖截面半正态 / 指数 / 截断正态前沿，没有面板支持、没有异方差、没有无效率
+决定因素 —— 而且关键的是，Jondrow 后验中存在符号错误，会静默地给出错误的
+效率得分；指数对数似然中还有一个错误的 ε 系数，而旧测试从未覆盖到它。该
+模块已重写（`_core.py`、`sfa.py`、`panel.py`、`te_tools.py` 共约 1,300 行），
+以对齐乃至超越 Stata 的 `frontier` / `xtfrontier` 与 R 的 `frontier` /
+`sfaR`。
+
+### 正确性修复
+
+- **Jondrow 后验的 μ\***：修正了三种分布下的 `sign` 约定 —— 旧代码
+  `μ* = -sign·ε·σ_u²/σ²` 已被推导验证过的 `μ* = sign·ε·σ_u²/σ²` 取代
+  （截断正态也做了相应修正）。旧实现给出的效率得分存在系统性偏误；请重跑
+  此前的分析。
+- **正态-指数对数密度**：修正了 ε 系数与 Φ 的参数（旧形式为
+  `+ sign·ε/σ_u + log Φ((-sign·ε - σ_v²/σ_u)/σ_v)`；按 Greene 2008 式
+  2.39 的正确形式是 `- sign·ε/σ_u + log Φ(sign·ε/σ_v - σ_v/σ_u)`）。旧的
+  指数路径从未产出效率得分（返回 NaN）—— 现在能给出正确的 Battese-Coelli
+  得分。
+- **截断正态密度**：把 φ 因子中的 `centered` 偏移从 `(ε + sign·μ)/σ` 修正
+  为 `(ε - sign·μ)/σ`。
+- 新增蒙特卡洛密度积分测试（`∫ f(ε) dε = 1`），为三种分布守住回归风险。
+
+### 新的截面 `sp.frontier`
+
+- **异方差的无效率项**，通过 `usigma=[...]` —— 参数化为
+  `ln σ_u_i = γ_u' [1, w_i]`（Caudill-Ford-Gropper 1995、Hadri 1999）。
+- **异方差的噪声项**，通过 `vsigma=[...]` —— 参数化为
+  `ln σ_v_i = γ_v' [1, r_i]`（Wang 2002）。
+- **无效率决定因素**，通过 `emean=[...]` —— 即
+  `dist='truncated-normal'` 下的 Battese-Coelli（1995）/
+  Kumbhakar-Ghosh-McGuckin（1991）模型 `μ_i = δ' [1, z_i]`。
+- **Battese-Coelli（1988）技术效率**：`result.efficiency(method='bc')` 返回
+  `E[exp(-u)|ε]`（Stata 的默认做法），此外还有 JLMS 近似
+  `exp(-E[u|ε])`（`method='jlms'`）。
+- **检验无效率项是否存在的 LR 检验**：单侧混合 χ̄²（Kodde-Palm 1986），
+  通过 `result.lr_test_no_inefficiency()` 给出。
+- **单位效率的 bootstrap 置信区间**：通过
+  `result.efficiency_ci(alpha=.05, B=500)` 给出参数化 bootstrap 的界。
+- **残差偏度诊断量**存放在 `result.diagnostics['residual_skewness']`。
+- 优化器现在对 `ln σ` 施加强硬边界，并防止 σ → 0 / σ → ∞ 的越界 —— 此前
+  这会让截断正态的拟合发散。
+
+### 新的面板 `sp.xtfrontier`
+
+- **Pitt-Lee（1981）时不变**（`model='ti'`）：`u_it = u_i`，半正态或截断
+  正态。由逐单位积分导出闭式的组对数似然；单位层面的 TE 存放在
+  `result.diagnostics['efficiency_bc_unit']`。
+- **Battese-Coelli（1992）时变衰减**（`model='tvd'`）：
+  `u_it = exp(-η(t - T_i)) · u_i`，其中 η 与其他参数联合估计。观测层面的
+  效率在后验 `u_i ~ N⁺(μ*, σ*²)` 下采用 `E[exp(-a_it u_i)|e_i]`（矩母函数
+  形式）。
+- **Battese-Coelli（1995）无效率效应**（`model='bc95'`）：
+  `u_it ~ N⁺(z_it' δ, σ_u²)` 且相互独立；返回时附带按单位均值汇总的效率。
+
+### 辅助函数
+
+- `sp.te_summary(result)` —— Stata 风格的 TE 得分描述表（n、均值、sd、
+  四分位数、> 0.9 的占比、< 0.5 的占比）。
+- `sp.te_rank(result, with_ci=True)` —— 效率排名，可带上用于基准对比的
+  bootstrap 置信区间。
+
+### 测试
+
+- **33 项新测试**，覆盖：三种截面分布的参数还原、成本型与生产型的符号处理、
+  异方差的 σ_u / σ_v、BC95 决定因素、LR 设定检验、TE 得分的界与内部一致性、
+  bootstrap CI 的结构、Pitt-Lee / BC92 / BC95 的面板还原，以及
+  "密度积分为 1"的核健全性检查。
+
+### 前沿的高级扩展
+
+初始重构之后又落地了三项前沿扩展（提交 `e876937`）：
+
+- **`sp.zisf`** —— 零无效率 SFA 混合模型（Kumbhakar-Parmeter-Tsionas
+  2013）。由完全有效（`u=0`，纯噪声）与标准的复合误差两种机制混合；混合
+  概率 `p_i` 通过可选的 `zprob` 协变量上的 logit 参数化。后验
+  `P(efficient|ε)` 暴露在 `diagnostics['p_efficient_posterior']` 中。还原
+  测试：真实有效占比 0.30 → 在 `n=2000` 上估计为 0.286。
+- **`sp.lcsf`** —— 两类别潜类别 SFA（Orea-Kumbhakar 2004；Greene 2005）。
+  两条各自独立的前沿，各带自己的 `β_k` 与方差参数；类别归属 logit 作用在
+  可选的 `z_class` 协变量上。采用带扰动起点的直接 MLE，以打破标签对称性。
+- **`xtfrontier(..., model='tfe', bias_correct=True)`** —— Dhaene-Jochmans
+  （2015）针对 TFE 的分面板刀切法修正：
+  `β_BC = 2·β_full − (β_first_half + β_second_half)/2`。它削减了 `O(1/T)`
+  的伴生参数偏误。对退化的半样本有守卫：跳过 σ 的修正，并在 `model_info`
+  中给出注解。在 `T=30`、`N=25` 上验证：原始 `σ_u=0.374` → 修正后
+  `σ_u=0.359`（真实值 0.35）。
+
+### 生产率辅助函数
+
+随提交 `be59260` 发布：
+
+- **`sp.malmquist`** —— Färe-Grosskopf-Lindgren-Roos（1994）Malmquist
+  全要素生产率指数，通过逐期的参数化前沿拟合得到。返回逐期转移的分解
+  `M = EC × TC`（效率变化 × 技术变化）。逐行恒等关系 `M == EC·TC` 已验证
+  到 `rtol=1e-8`。成本型前沿通过倒数距离约定支持。在带 5%/年截距增长的
+  3 期 DGP 上验证：平均 TC ≈ 1.07–1.09，平均 EC ≈ 1.0。
+- **`sp.translog_design`** —— Cobb-Douglas → Translog 的设计矩阵辅助函数。
+  追加 `0.5·log(x_k)²` 平方项与 `log(x_k)·log(x_l)` 交互项；`translog_terms`
+  列表存放在 `df.attrs` 中，可一行喂给 `frontier()` / `xtfrontier()`。
+  平方项与交互项均可开关。
+
+### 迁移说明
+
+- 旧写法 `frontier(df, y='y', x=['x1'])` 仍然可用（必填参数不变）。
+- 新增仅关键字参数：`usigma`、`vsigma`、`emean`、`te_method`、`start`。
+- 既有的效率得分应重新计算 —— 此前的值受 Jondrow 符号错误影响而存在
+  系统性偏误。
+
+------------------------------------------------------------------------
+
+### 多层 / 混合效应重构
+
+发布重点：`statspai.multilevel`。此前实现是一个 400 行的单文件，只覆盖带
+对角随机效应协方差的两层线性混合模型。现在重写为一个正式的子包
+（`_core.py`、`lmm.py`、`glmm.py`、`diagnostics.py`、`comparison.py` 共约
+2,000 行），在功能上与 `lme4` / Stata `mixed` 对齐，并在此之上有额外扩展。
+
+### `sp.mixed` 的新内容
+
+- 随机效应的**非结构化协方差** `G` 现为默认（`cov_type='unstructured'`，
+  以 Cholesky 参数化以便优化器无约束）。`diagonal` 与 `identity` 仍可用于
+  嵌套模型的比较。
+- 通过 `group=['school', 'class']` 支持**三层嵌套模型** —— 联合拟合学校层
+  与班级层的随机截距（已验证在方差成分与固定效应上与
+  `statsmodels.MixedLM(..., re_formula="1", vc_formula={...})` 四位小数
+  相符）。
+- **BLUP 后验标准误**（`result.ranef(conditional_se=True)`）—— 暴露
+  `Var(u|y) = G − GZ'V⁻¹ZG + GZ'V⁻¹X Cov(β̂) X'V⁻¹ZG`，供 caterpillar 图
+  使用。
+- **`predict(new_data, include_random=…)`** —— 总体边缘预测与按组的条件
+  预测，对未见过的组把 BLUP 置零。
+- **Nakagawa-Schielzeth 的边缘与条件 R²**，通过 `result.r_squared()`。
+- **AIC / BIC、`wald_test()`**（用于线性约束检验）、
+  **`to_markdown()` / `to_latex()` / `_repr_html_()` / `cite()`**，以及
+  `plot(kind='caterpillar' | 'residuals')`。
+
+### 新函数
+
+- **`sp.melogit` / `sp.mepoisson` / `sp.meglm`** —— 广义线性混合模型
+  （二项 logit、泊松对数、高斯恒等），用 Laplace 近似配合规范连接下的观测
+  信息阵拟合。支持随机截距与随机斜率，`cov_type` 与 `sp.mixed` 一致，二项
+  的 `trials=` 与泊松的 `offset=`。结果暴露 `odds_ratios()` /
+  `incidence_rate_ratios()`，以及 `predict(type='response'|'linear')` 方法。
+- **`sp.icc(result)`** —— 组内相关系数，带 delta 方法（logit 尺度）的
+  95% CI。
+- **`sp.lrtest(restricted, full)`** —— 两个嵌套混合模型拟合之间的似然比
+  检验，在检验方差成分时自动套用 Self-Liang χ̄² 边界修正。
+
+### 验证
+
+- 线性混合模型：在随机截距与随机斜率的非结构化设定下，固定效应与方差成分
+  都和 `statsmodels.MixedLM` 四位小数相符
+  （`test_multilevel.py::TestRandomSlopeUnstructured::test_matches_statsmodels`）。
+- 三层嵌套：方差成分被联合识别，并与参照实现在两位小数上相符
+  （`TestThreeLevelNested::test_separates_variance_components`）。
+- 在 2,000 个观测的合成面板上做 GLMM 还原测试：斜率与随机截距的方差都落在
+  预期的抽样波动范围内。
+
+### 行为变更
+
+- `sp.mixed` 的 `cov_type` 默认值现为 `'unstructured'`（此前实际是对角）。
+  想要旧行为请显式传入 `cov_type='diagonal'`。
+- 「相对混合 OLS 的 LR 检验」现在使用转换到 ML 的似然（此前混用了 REML 与
+  ML，在 `method='reml'` 时可能给出不一致的数值）。
+
+### 评审后的加固（oracle + code-reviewer 审计之后）
+
+- **【阻塞项修复】** `MixedResult.predict(data=None)` 此前返回的是按组迭代
+  顺序、而非原始行顺序的预测。`_GroupBlock` 现在携带训练行索引，
+  `predict()` 会把输出散布回正确的位置。回归测试：
+  `tests/test_multilevel.py::TestRandomIntercept::test_predict_is_row_aligned_with_training_frame`。
+- **【阻塞项修复】** GLMM 内部的 Newton 迭代（`_find_mode`）现在会对大步长
+  做阻尼，并返回收敛标志。`meglm` 会汇总每个聚类的失败情况，并在任何聚类
+  未能收敛时发出 `RuntimeWarning` —— 此前这是静默失败。
+- **【高危修复】** `MEGLMResult` 补上 `to_latex()` 与 `plot()`，以对齐
+  StatsPAI 统一的结果契约。
+- **【高危修复】** `lrtest` 现在对跨分布族的比较、以及对固定效应设计不同的
+  REML 拟合抛出 `ValueError`，从而避免得到无效的 LR 统计量。多成分的边界
+  修正会发出 `RuntimeWarning`，说明所给出的是保守上界（Stram–Lee 1994 的
+  混合形式未实现）。
+- **【高危修复】** `mixed()` / `meglm()` 会拒绝不可哈希的分组取值，给出
+  描述清晰的 `TypeError`，而不是静默地产生损坏的 BLUP 字典。
+- **【中危修复】** `icc(result, n_boot>0)` 改为抛出
+  `NotImplementedError`，而不是静默返回 delta 方法的 CI。`icc()` 在
+  `n_groups < 30` 时发出警告（此时 delta 方法的 CI 不可靠）。
+- **【中危修复】** 三层嵌套拟合在任一层外层组只含一个内层组时发出警告
+  （此时班级方差无法识别），并通过 `variance_components['icc(outer)']` /
+  `icc(outer+inner)` 同时暴露学校层与班级层的 ICC。
+
+### GLMM 加固 —— AGHQ + Gamma / 负二项 / 有序
+
+补齐了多层自审中标记的三处 GLMM 缺口。所有改动都是增量式的（无 API
+破坏）；既有的 `meglm` / `melogit` / `mepoisson` 调用会得到数值上完全相同的
+拟合结果。
+
+**自适应 Gauss-Hermite 求积（AGHQ）—— `nAGQ` 参数。** 此前 `meglm` 只提供
+Laplace 近似（`nAGQ=1`），而众所周知它在小聚类、二值或其他非高斯结果上会
+低估随机效应的方差。新的 `nAGQ` 参数用于选择每个标量随机效应上的自适应求积
+点数：
+
+``` python
+sp.melogit(df, "y", ["x"], "g", nAGQ=7)   # 与 Stata intpoints(7) 相当
+sp.megamma(df, "y", ["x"], "g", nAGQ=15)  # 达到收敛水准的求积
+```
+
+`nAGQ=1` 会精确退化为 Laplace 公式（已验证到 1e-10）。`nAGQ>1` 限定于
+单标量随机效应的模型（不支持随机斜率），这与 `lme4::glmer` 施加的限制相同
+—— 在 `q>1` 个随机效应上做完整张量积 AGHQ 被推迟，因为其开销按 `nAGQ^q`
+增长。AGHQ 已接入全部五个分布族（高斯 / 二项 / 泊松 / Gamma / 负二项）以及
+`meologit`。
+
+**新的分布族：**
+
+- **`sp.megamma`** —— 带对数连接的 Gamma GLMM，离散参数 `φ` 由 ML 估计，
+  以 `log φ` 打包以保证无约束优化。IRLS 权重使用 Fisher 信息 `1/φ`
+  （Fisher 得分法），使 Hessian 无论拟合均值如何都保持半正定。
+- **`sp.menbreg`** —— 负二项 NB-2 GLMM（`Var = μ + α μ²`），带对数连接，
+  离散参数 `α`（也接受 `family='negbin'` 别名）。当 `α → 0` 时解析地退化
+  为泊松；已验证。
+- **`sp.meologit`** —— 随机效应有序 logit（Stata `meologit`、R
+  `ordinal::clmm`）。K−1 个阈值被重新参数化为 `κ_1, log(κ_2−κ_1), ...`，
+  从而无条件地强制严格排序。返回带新属性 `thresholds` 的 `MEGLMResult`。
+  支持 `nAGQ>1`。
+
+**跨族可比的 AIC。** 泊松与二项的对数似然现在会包含完整的归一化常数
+（泊松为 `-log(y!)`，二项为对数二项系数）。此前这些常数被丢掉了，这使得
+`mepoisson` 与 `menbreg` 之间的 AIC 比较带有约 `Σ log(y!)` 的偏误。β 与
+方差的估计不变；只有 `log_likelihood` 与 `aic` / `bic` 的**绝对**值会发生
+平移 —— 同一族内部的相对比较不受影响。
+
+**测试（多层）。** `tests/test_multilevel.py` 从 35 项增加到 53 项：
+
+- `TestAGHQ`（7 项）—— nAGQ=1 ↔ Laplace 的恒等性、在小聚类上 AGHQ 相对
+  Laplace 的改进、随 nAGQ 的收敛、对随机斜率的拒绝。
+- `TestMEGamma`（3 项）—— 真值还原、离散参数的核算、摘要输出。
+- `TestMENegBin`（3 项）—— 真值还原、IRR 可用性、别名解析。
+- `TestMEOLogit`（5 项）—— 真值还原、阈值排序、无截距、摘要输出、K≥3 的
+  强制要求。
+
+向后兼容性：此前的 35 项多层测试全部原样通过。
+
+### 合成控制的 API 漂移修复（0.9.3 初版之后）
+
+- **`SyntheticControl._solve_weights` 签名迁移** —— `synth/power.py` 与
+  `synth/sensitivity.py` 中三处过期的调用点已迁移到新的
+  （Y_treated_pre、Y_donors_pre、X_treated、X_donors、run_nested）签名
+  （修复了 `tests/test_synth_advanced.py` 与 `tests/test_synth_extras.py`
+  中的 8 项失败）。
+- **安慰剂对齐** —— `synth/power.py` 的安慰剂构造器现在严格遵循
+  `scm.py:888`，使 LOO ↔ 主安慰剂的结果保持一致。
+- **numpy 2.x 兼容性** —— `tests/test_frontier.py` 把 `np.trapz` 换成
+  `np.trapezoid`（前者在 numpy 2.x 中已被移除）。
+
+------------------------------------------------------------------------
+
+### 计量三支柱 —— P0 支柱（DML-PLIV、Mixed Logit、IV-QR）
+
+三个被认定为相对 Stata、R 及现有 Python 包投入产出比最高的计量估计量，
+现在都成为一级的 `sp.*` API（新增约 1,170 行，10 项测试位于
+`test_econ_trinity.py`）。
+
+- **`sp.dml(model='pliv', instrument=…)` —— DML-PLIV（部分线性 IV）。**
+  采用 Chernozhukov 等（2018，§4.2）的 Neyman 正交得分，配合交叉拟合的冗余
+  函数 `g(X)=E[Y|X]`、`m(X)=E[D|X]`、`r(X)=E[Z|X]`。返回带基于影响函数的
+  标准误的 LATE。补上了现有 `DoubleML` 中的 IV 缺口（此前只有 PLM + IRM）。
+- **`sp.mixlogit` —— Mixed Logit。** 通过带 Halton 拟随机抽样的模拟极大似然
+  实现的随机系数多项 logit。支持：固定 + 随机系数、正态 / 对数正态 / 三角
+  混合分布、对角或完整 Cholesky 协方差、面板（重复选择）数据、OPG 三明治
+  稳健标准误。已与 Stata `mixlogit` 及 R `mlogit` 基准对比。这是 Python 中
+  第一个功能完整的实现。
+- **`sp.ivqreg` —— IV 分位数回归。** 通过逆 QR 剖面实现
+  Chernozhukov-Hansen（2005、2006、2008）的工具变量分位数回归。标量内生
+  变量的情形用网格 + Brent 精细化；多维情形在 `b̂(α)` 准则上用 BFGS。多个
+  分位数时返回规整的 DataFrame；单个分位数时返回 `EconometricResults`。
+  可选的成对 bootstrap 标准误。
+
+三者都复用了 `_qreg_fit`、`CausalResult`、`EconometricResults`，以与
+StatsPAI 的其他部分保持 API 一致。
+
+#### 自审后的加固
+
+自审 + code-reviewer agent 在第一版实现中发现并修复了 4 个阻塞项 + 7 个高危
+缺陷（见提交 `2aa709b`）。参数还原测试现在在受控 DGP 上通过。
+
+------------------------------------------------------------------------
+
+### 智能工作流 —— 后验验证
+
+随提交 `be59260` 发布：
+
+- **`sp.verify`** / **`sp.verify_benchmark`** —— 面向 `sp.recommend()` 输出的
+  后验验证引擎。跑 bootstrap 稳定性、安慰剂通过率与子样本一致性，汇总为
+  `verify_score ∈ [0, 100]`。通过 `sp.recommend(verify=True)` 选择启用；
+  未启用时零开销。
+- 校准卡片显示：在干净的 DGP 上，首选方法的 `verify_score` 为 85–95
+  （RD 因局部多项式的 bootstrap 方差而较低，约 74）。
+- 18/18 项 smart 测试通过。
+
+------------------------------------------------------------------------
+
+### 元数据 —— 作者署名
+
+- 作者元数据由 `Bryce Wang` 修正为 `Biaoyue Wang`，涉及：`pyproject.toml`
+  （`authors` + `maintainers`）、`src/statspai/__init__.py`（`__author__`）、
+  `README.md` / `README_CN.md`（团队行 + BibTeX）、`docs/index.qmd`
+  （BibTeX），以及 `mkdocs.yml`（`site_author`）。JOSS 投稿（`paper.md`）
+  原本就是正确的。
+
+------------------------------------------------------------------------
+
+## \[0.9.2\] - 2026-04-16
+
+### 分解分析 —— Python 中最全面的分解分析工具集
+
+发布重点：`statspai.decomposition`。**横跨 13 个模块的 18 个一级分解方法
+（约 6,200 行代码、54 项测试）** —— 这是 Python 中第一个（也是最完整的）
+覆盖均值、分布、不平等、人口学与因果分解的完整工具集实现。在覆盖面上超过
+Stata 的 `ddecompose` / `cdeco` / `oaxaca` / `rifhdreg` / `mvdcmp` /
+`fairlie` 与 R 的 `Counterfactual` / `ddecompose` / `oaxaca` / `dineq`；
+填补了此前 Python 上只有唯一一个且已无人维护的 PyPI 包的空白高地。
+
+#### `sp.decompose` 中有什么（18 个方法、30 个别名）
+
+**均值分解**
+
+| 函数 | 方法 / 论文 |
+|------------------------------------|------------------------------------|
+| `sp.oaxaca(df, ...)` | Blinder-Oaxaca 三分解，带 5 组参照系数（Blinder 1973；Oaxaca 1973；Neumark 1988；Cotton 1988；Reimers 1983） |
+| `sp.gelbach(df, ...)` | 遗漏变量偏误的序贯正交分解（Gelbach 2016，*JoLE*） |
+| `sp.fairlie(df, ...)` | 非线性的 logit/probit 分解（Fairlie 1999, 2005） |
+| `sp.bauer_sinning(df, ...)` / `sp.yun_nonlinear(df, ...)` | Bauer-Sinning（2008）+ Yun（2004, 2005）的详细非线性分解 |
+
+**分布分解**
+
+| 函数 | 方法 / 论文 |
+|------------------------------------|------------------------------------|
+| `sp.rifreg(df, ...)` / `sp.rif_decomposition(...)` | 再中心化影响函数（RIF）回归 + OB 分解（Firpo、Fortin & Lemieux 2009，*Econometrica*） |
+| `sp.ffl_decompose(df, ...)` | 两步详细分解（Firpo、Fortin & Lemieux 2018，*Econometrics*） |
+| `sp.dfl_decompose(df, ...)` | 重加权的反事实分布（DiNardo、Fortin & Lemieux 1996，*Econometrica*） |
+| `sp.machado_mata(df, ...)` | 基于模拟的分位数回归分解（Machado & Mata 2005，*JAE*） |
+| `sp.melly_decompose(df, ...)` | 解析式的分位数回归分解（Melly 2005，*Labour Economics*） |
+| `sp.cfm_decompose(df, ...)` | 分布回归的反事实（Chernozhukov、Fernández-Val & Melly 2013，*Econometrica*） |
+
+**不平等分解**
+
+| 函数 | 方法 / 论文 |
+|------------------------------------|------------------------------------|
+| `sp.subgroup_decompose(df, ...)` | Theil T、Theil L、GE(α)、基尼（Dagum 1997）、Atkinson、CV²（Shorrocks 1984）的组间/组内分解 |
+| `sp.shapley_inequality(df, ...)` | 把不平等按协变量分配的 Shorrocks-Shapley 分解（Shorrocks 2013，*JoEI*） |
+| `sp.source_decompose(df, ...)` | 基尼的来源分解（Lerman & Yitzhaki 1985，*ReStat*） |
+
+**人口学标准化**
+
+| 函数 | 方法 / 论文 |
+|------------------------------------|------------------------------------|
+| `sp.kitagawa_decompose(df, ...)` | 双因素的率分解（Kitagawa 1955，*JASA*） |
+| `sp.das_gupta(df_a, df_b, ...)` | 多因素的对称分解（Das Gupta 1993） |
+
+**因果分解**
+
+| 函数 | 方法 / 论文 |
+|------------------------------------|------------------------------------|
+| `sp.gap_closing(df, method=...)`（regression / IPW / AIPW） | 缺口闭合估计量（Lundberg 2021，*Sociol. Methods Res.*） |
+| `sp.mediation_decompose(df, ...)` | 自然的直接/间接效应（VanderWeele 2014，*Epidemiology*） |
+| `sp.disparity_decompose(df, ...)` | 因果性差异分解（Jackson & VanderWeele 2018，*Epidemiology*） |
+
+**统一入口**
+
+``` python
+import statspai as sp
+result = sp.decompose(method='ffl', data=df, y='log_wage',
+                      group='female', x=['education', 'experience'],
+                      stat='quantile', tau=0.5)
+result.summary(); result.plot(); result.to_latex()
+```
+
+支持 30 个别名（`'mm'` → `machado_mata`、`'dinardo_fortin_lemieux'` →
+`dfl` 等）。
+
+#### 为什么这件事重要
+
+- **Stata** 里这些功能散落在 6 个以上的包中（`oaxaca`、`ddecompose`、
+  `cdeco`、`rifhdreg`、`mvdcmp`、`fairlie`），没有统一的 API。
+- **R** 里有 `ddecompose`、`Counterfactual`、`dineq` —— 三位作者、三套约定。
+- **Python** 此前只有一个 2018 年出品、已无人维护的 PyPI 包（仅含基础的
+  Oaxaca）。
+- **StatsPAI 0.9.2**：一套 API、一份结果类契约（`.summary()` / `.plot()` /
+  `.to_latex()` / `._repr_html_()`）、三种推断模式（解析式 / bootstrap /
+  无），全部基于 numpy/scipy/pandas。
+
+#### 质量门槛
+
+- 54 项测试，含跨方法一致性（`test_dfl_ffl_mean_agree`、
+  `test_mm_melly_cfm_aligned_reference`、`test_dfl_mm_reference_convention_opposite`）
+  与数值恒等式检查（FFL 四部分求和、加权基尼的 RIF 满足 E_w\[RIF\]=G）。
+- Theil T / Theil L / Atkinson 使用闭式影响函数（没有 O(n²) 的数值回退）。
+- 通过"排序 ECDF + 成对 MAD 恒等式"实现的加权 O(n log n) 的 Dagum 基尼。
+- Logit 不收敛会以 RuntimeWarning 暴露；bootstrap 失败率 > 5% 时告警。
+## \[0.9.1\] - 2026-04-16
+
+### 断点回归 —— 所有语言中最完整的 RD 工具集
+
+发布重点：`statspai.rd`。**横跨 14 个模块的 18 种以上 RD 估计量、诊断与推断
+方法（约 10,300 行代码）** —— 现在是 Python、R 或 Stata 中功能最完整的 RD
+包。Calonico-Cattaneo-Titiunik（CCT）、Cattaneo-Jansson-Ma 密度检验、
+Armstrong-Kolesar 诚实置信区间、Cattaneo-Titiunik-Vazquez-Bare 局部随机化、
+Cattaneo-Titiunik-Yu 边界（二维）RD，以及 Angrist-Rokkanen 外部有效性 ——
+所有这些机制都在一个 `import statspai as sp` 之中。
+
+#### `sp.rd` 中有什么（14 个模块）
+
+**核心估计**
+
+| 函数 | 方法 / 论文 |
+|------------------------------------|------------------------------------|
+| `sp.rdrobust(df, ...)` | 精确 / 模糊 / 拐点 RD，带偏差校正的稳健推断（Calonico、Cattaneo & Titiunik 2014，*Econometrica*；2020，*Stata Journal*） |
+| `sp.rdrobust(..., covs=...)` | 协变量调整后的局部多项式（Calonico、Cattaneo、Farrell & Titiunik 2019，*ReStat*） |
+| `sp.rd2d(df, x1, x2, ...)` | 边界不连续 / 二维 RD 设计（Cattaneo、Titiunik & Yu 2025） |
+| `sp.rkd(df, ...)` | 拐点回归设计（Card、Lee、Pei & Weber 2015，*Econometrica*） |
+| `sp.rdit(df, time, ...)` | 时间断点回归（Hausman & Rapson 2018，*Annual Review*） |
+| `sp.rdmc(df, cutoffs=[...])` | 多断点 RD（Cattaneo、Titiunik、Vazquez-Bare & Keele 2016） |
+| `sp.rdms(df, scores=[...])` | 多驱动变量 RD（Cattaneo、Idrobo & Titiunik 2024） |
+
+**带宽选择**
+
+| 函数 | 选择准则 |
+|------------------------------------|------------------------------------|
+| `sp.rdbwselect(df, bwselect='mserd')` | MSE 最优（Imbens-Kalyanaraman 2012） |
+| `sp.rdbwselect(..., bwselect='msetwo')` | 双带宽 MSE |
+| `sp.rdbwselect(..., bwselect='cerrd'/'cercomb1'/'cercomb2')` | CER 最优的覆盖错误率（Calonico、Cattaneo & Farrell 2020，*Econometrics Journal*） |
+
+**推断**
+
+| 函数 | 方法 |
+|------------------------------------|------------------------------------|
+| `sp.rd_honest(df, ...)` | 带最坏情形偏差界的诚实置信区间（Armstrong & Kolesar 2018，*Econometrica*；2020，*QE*） |
+| `sp.rdrandinf(df, ...)` | 通过 Fisher 精确检验实现的局部随机化推断（Cattaneo、Frandsen & Titiunik 2015） |
+| `sp.rdwinselect(df, ...)` | 面向局部随机化的数据驱动窗口选择 |
+| `sp.rdsensitivity(df, ...)` | 跨窗口的敏感性分析 |
+| `sp.rdrbounds(df, ...)` | 针对隐性选择的 Rosenbaum 敏感性界 |
+
+**异质性处理效应**
+
+| 函数 | 方法 |
+|------------------------------------|------------------------------------|
+| `sp.rdhte(df, covs=[...])` | 通过完全交互的局部线性得到 CATE（Calonico 等 2025） |
+| `sp.rdbwhte(df, ...)` | 面向 HTE 的最优带宽 |
+| `sp.rd_forest(df, ...)` | 因果森林 + RD |
+| `sp.rd_boost(df, ...)` | 梯度提升 + RD |
+| `sp.rd_lasso(df, ...)` | 带协变量选择的 LASSO 辅助 RD |
+
+**外部有效性与外推**
+
+| 函数 | 方法 |
+|------------------------------------|------------------------------------|
+| `sp.rd_extrapolate(df, ...)` | 远离断点的外推（Angrist & Rokkanen 2015，*JASA*） |
+| `sp.rd_multi_extrapolate(df, cutoffs=[...])` | 多断点外推（Cattaneo、Keele、Titiunik & Vazquez-Bare 2024） |
+
+**诊断与可视化**
+
+| 函数 | 用途 |
+|------------------------------------|------------------------------------|
+| `sp.rdsummary(df, ...)` | **一键式仪表盘** —— rdrobust + 密度检验 + 带宽敏感性 + 安慰剂断点 + 协变量平衡 |
+| `sp.rdplot(df, ...)` | 带逐点置信带的 IMSE 最优分箱散点图（Calonico、Cattaneo & Titiunik 2015，*JASA*） |
+| `sp.rddensity(df, ...)` | Cattaneo-Jansson-Ma（2020，*JASA*）操纵检验 |
+| `sp.rdbalance(df, covs=[...])` | 断点处的协变量平衡检验 |
+| `sp.rdplacebo(df, cutoffs=[...])` | 安慰剂断点检验 |
+
+**功效分析**
+
+| 函数 | 用途 |
+|--------------------------------------|-----------------------------|
+| `sp.rdpower(df, effect_sizes=[...])` | RD 设计的功效曲线 |
+| `sp.rdsampsi(df, target_power=0.8)`  | 所需样本量 |
+
+#### 重构 —— 合并 rd/\_core.py
+
+一次历时 5 个冲刺的重构（提交 44f7529）把原本散落在 9 个 RD 文件中的共享
+底层原语集中到单个私有模块 `rd/_core.py`（191 行）：
+
+- `_kernel_fn` —— 三角 / Epanechnikov / 均匀 / 高斯（此前有 4 份重复定义）
+- `_kernel_constants` / `_kernel_mse_constant` —— MSE 最优的带宽常数
+- `_local_poly_wls` —— 带 HC1 / 聚类稳健方差、并可选择性增广协变量的 WLS
+  局部多项式拟合
+- `_sandwich_variance` —— 面向任意设计矩阵的 HC1 / 聚类三明治估计量
+
+**净效果**：253 行重复的数学代码被合并为 191 行的规范实现。97 项 RD 测试
+全部通过、零回归。
+
+#### 缺陷修复（自 0.9.0 起）
+
+- RD 外推：`_ols_fit` 的奇异矩阵回退（提交 052594a）
+- 来自 RD 全面代码评审的 3 个关键 + 3 个高优先级缺陷（提交 6489270）
+- 密度检验：CJM（2020）实现中的缺陷 + DGP 辅助函数修复 + 验证测试
+  （提交 b66f312）
+
+#### 测试
+
+- **97 项 RD 测试 + 1 项跳过、0 失败**，分布在 5 个测试文件中。
+
+### 0.9.1 中的其他内容
+
+- **`synth/_core.py`** —— 把 6 份重复实现合并为统一的单纯形权重求解器
+  （提交 a4036a2）。解析形式的 Jacobian 现在对全部六个调用点可用，带来约
+  3–5 倍加速。
+- **`decomposition/_common.py`** —— 新增的
+  `influence_function(y, stat, tau, w)` 成为规范的 9 种统计量 RIF 核。
+  `rif.rif_values` 的公开 API **从 3 种统计量扩展到 9 种**（提交 0789223、
+  5569fd0）。
+------------------------------------------------------------------------
+
+## \[0.9.0\] - 2026-04-16
+
+### 合成控制 —— 所有语言中最完整的 SCM 工具集
+
+发布重点：`statspai.synth`。**20 种 SCM 方法 + 6 种推断策略 + 完整的研究
+工作流（比较 / 功效 / 敏感性 / 一键式报告）**，全部收敛在统一的
+`sp.synth(method=...)` 分发器之后。Python、R 或 Stata 中没有任何竞品包具备
+这样的广度。
+
+#### 七个新的 SCM 估计量
+
+| 方法 | 参考文献 |
+|------------------------------------|------------------------------------|
+| `bayesian_synth` | 带完整后验可信区间的 Dirichlet 先验 MCMC（Vives & Martinez 2024） |
+| `bsts_synth` / `causal_impact` | 通过 Kalman 滤波/平滑实现的贝叶斯结构时间序列（Brodersen 等 2015） |
+| `penalized_synth`（penscm） | 成对差异惩罚（Abadie & L'Hour 2021，*JASA*） |
+| `fdid` | 带最优供体子集选择的前向 DID（Li 2024） |
+| `cluster_synth` | K-means / 谱 / 层次的供体聚类（Rho 2024） |
+| `sparse_synth` | L1 / 带约束的 LASSO / 联合的 V+W（Amjad、Shah & Shen 2018，*JMLR*） |
+| `kernel_synth` + `kernel_ridge_synth` | 基于 RKHS / MMD 的非线性匹配 |
+
+此前的方法 —— classic、penalized、demeaned、unconstrained、augmented、
+SDID、gsynth、staggered、MC、discos、multi-outcome、scpi —— 全部保留，并
+附带缺陷修复（见下文）。
+
+#### 研究工作流
+
+- `synth_compare(df, ...)` —— 一次性跑完所有方法，给出表格 + 图形对比
+- `synth_recommend(df, ...)` —— 按事前拟合 + 稳健性自动挑选最佳估计量
+- `synth_report(result, format='markdown'|'latex'|'text')` —— 一键生成
+  可直接投稿的报告
+- `synth_power(df, effect_sizes=[...])` —— 面向 SCM 设计的第一个功效分析
+  工具
+- `synth_mde(df, target_power=0.8)` —— 最小可检测效应
+- `synth_sensitivity(result)` —— LOO + 时间安慰剂 + 供体敏感性 + RMSPE 过滤
+- 附带三个经典数据集：`california_tobacco()`、`german_reunification()`、
+  `basque_terrorism()`
+
+#### 来自模块全面评审的发布阻塞项修复
+
+在 5 个并行 agent 的代码评审（正确性 / 数值 / API / 性能 / 文档）之后，
+修复了九处发布阻塞项：
+
+- **ASCM 的修正公式** —— `augsynth` 现在遵循 Ben-Michael、Feller &
+  Rothstein（2021）式 3 的逐期岭偏差 `(Y1_pre − Y0'γ) @ β(T0, T1)`，取代了
+  此前用标量均值残差充当的占位实现。`_ridge_fit` 的右端项缺陷也已修复。
+- **贝叶斯似然的尺度** —— 协变量各行在拼接前先按合并后的事前结果 SD 做
+  z-score，防止尺度失配主导高斯的 `σ²` 后验。
+- **贝叶斯 MCMC 的 Jacobian** —— 补上了 σ 上对数正态随机游走提议缺失的
+  `log(σ′/σ)` 修正项，已加入 MH 接受率。
+- **BSTS Kalman 滤波** —— 新息方差设下界 `1e-12`（防止在恒定结果序列上出现
+  `log(0)`）；RTS 平滑器在预测协方差接近奇异时由 `inv` 回退到
+  `solve + pinv`。
+- **gsynth 的因子估计** —— 四处 `np.linalg.inv` 调用（载荷 + 安慰剂循环）
+  替换为 `np.linalg.lstsq`（对秩亏的 `F'F` / `L'L` 更稳健）。
+- **分发器的 `**kwargs` 泄漏** —— `augsynth` 增加 `**kwargs + placebo=True`；
+  `sp.synth(method='augmented', placebo=False)` 不再抛出 `TypeError`。
+- **分发器对 `kernel_ridge` 的安慰剂绕过** —— `placebo=` 现在被正确转发。
+- **跨方法的 API 一致性** —— `sdid()` 现在接受规范的
+  `outcome / treated_unit / treatment_time`（保留旧别名
+  `y / treat_unit / treat_time` 以向后兼容）。
+- **文档准确性** —— `synth_compare` 的 docstring 反映了 20 种方法（此前写
+  12 种）；`synth()` 的 Returns 段列举了全部 `CausalResult` 字段。
+
+#### 测试与验证
+
+- **144 项合成控制测试通过**（新增：12 方法跨方法一致性基准，验证每个估计量
+  在干净 DGP 上都能在 1.5 个单位内还原已知 ATT）。
+- **全量套件：1481 项通过、4 项跳过、0 失败**（5 分 42 秒）。
+- 新指南：`docs/guides/synth.qmd` —— 覆盖全部 20 种方法的完整教程，并附
+  方法选择的决策表。
+
+#### API 迁移说明
+
+`sdid(y=, treat_unit=, treat_time=)` 仍然可用，但为与其他所有 `sp.synth.*`
+函数保持一致，推荐使用 `outcome=, treated_unit=, treatment_time=`。旧名称
+计划在 v1.0 废弃。
+
+### 其他模块
+
+分解与断点回归模块在本发布周期内也有显著升级（分解的 tier-C 扩展到 18 种
+方法 + 统一的 `sp.decompose()`；RD 的 `_core.py` 原语集中化 + 来自代码评审
+的缺陷修复）。这些会在专门的后续发布说明中重点介绍。
+------------------------------------------------------------------------
+
+## \[0.8.0\] - 2026-04-16
+
+### 空间计量全栈 + 10 个领域的广度升级
+
+**StatsPAI 历史上最大的一次发布。横跨 10 个领域的 60 多个新函数。**
+
+#### 空间计量经济学（全新 —— 38 个 API 符号）
+
+从 3 个函数 / 419 行代码扩展到 **38 个函数 / 3,178 行代码 / 69 项测试**。
+Python 中第一个统一的空间计量经济学包。
+
+- **权重（L1）**：`W`（稀疏 CSR）、`queen_weights`、`rook_weights`、
+  `knn_weights`、`distance_band`、`kernel_weights`、`block_weights`
+- **ESDA（L2）**：`moran`（全局 + 局部）、`geary`、`getis_ord_g`、
+  `getis_ord_local`、`join_counts`、`moran_plot`、`lisa_cluster_map`
+- **极大似然回归（L3）**：`sar`、`sem`、`sdm`、`slx`、`sac` —— 基于稀疏
+  存储、双路径的 log-det（精确 + Barry-Pace），可扩展到 N=100K
+- **GMM（L3）**：`sar_gmm`、`sem_gmm`、`sarar_gmm` —— Kelejian-Prucha
+  （1998/1999），异方差稳健
+- **诊断**：`lm_tests`（Anselin 1988 的完整检验组）、`moran_residuals`
+- **效应**：`impacts`（LeSage-Pace 2009 的直接/间接/总效应 + 模拟 SE）
+- **GWR（L4）**：`gwr`、`mgwr`（多尺度 GWR）、`gwr_bandwidth`（AICc/CV 的
+  黄金分割搜索）
+- **空间面板（L5）**：`spatial_panel`（SAR-FE / SEM-FE / SDM-FE，个体 +
+  双向）
+- **交叉验证**：在 Columbus 数据上相对 PySAL spreg 1.9.0 的 rtol < 1e-7；
+  在 Georgia 数据上相对 mgwr 2.2.1 的 GWR 逐位一致；GMM 相对 spreg GM\_\*
+  的 rtol < 1e-4
+
+#### 时间序列
+
+- `local_projections` —— Jordà（2005）IRF，带 Newey-West HAC
+- `garch` —— GARCH(p,q) 的 MLE，带多步预测
+- `arima` —— ARIMA/SARIMAX，带基于 AICc 的 (p,d,q) 自动网格搜索
+- `bvar` —— 带 Minnesota（Litterman）先验的贝叶斯 VAR
+
+#### 因果发现
+
+- `lingam` —— DirectLiNGAM（Shimizu 2011），与 lingam 包逐位一致
+- `ges` —— 贪心等价搜索（Chickering 2002）
+
+#### 匹配
+
+- `optimal_match` —— 匈牙利算法的 1:1 匹配（最小化马氏距离总和）
+- `cardinality_match` —— Zubizarreta（2014）基于 LP 的匹配，带平衡约束
+
+#### 分解与中介
+
+- `rifreg` —— RIF 回归（Firpo-Fortin-Lemieux 2009）
+- `rif_decomposition` —— 面向分布统计量的 RIF Oaxaca-Blinder 分解
+- `mediate_sensitivity` —— Imai-Keele-Yamamoto（2010）的 ρ 敏感性分析
+
+#### RD 与调查
+
+- `rdpower`、`rdsampsi` —— RD 设计的功效 / 样本量
+- `rake`、`linear_calibration` —— 调查校准（Deville-Särndal 1992）
+
+#### 生存分析
+
+- `cox_frailty` —— 带共享 gamma 脆弱项的 Cox 模型（Therneau-Grambsch）
+- `aft` —— 加速失效时间模型（指数/Weibull/对数正态/对数 logistic）
+
+#### ML-因果（GRF）
+
+- `CausalForest.variable_importance()`、`.best_linear_projection()`、
+  `.ate()`、`.att()`
+- **缺陷修复**：诚实叶节点的取值现在能正确地逐叶变化
+
+#### 基础设施
+
+- OLS/IV 的 `predict(data, what='confidence'|'prediction')`，带区间
+- 发布前代码评审：修复 3 个关键 + 2 个高优先级缺陷
+## \[0.7.1\] - 2026-04-15
+
+以 DID 为重点的打磨版。把 Wooldridge（2021）的 ETWFE 实现提升到与 R
+`etwfe` 包完全的功能对等，新增一次调用即可完成的方法稳健性工作流，并修复了
+一轮内部代码评审发现的 12 个问题。全部 27 项新增 / 更新的 DID 测试通过
+（`pytest tests/test_did_summary.py`）。
+
+### 新增 —— ETWFE 与 R `etwfe` 完全对等
+
+- **`sp.etwfe()` 的显式 API**，与 R `etwfe`（McDermott 2023）的命名对齐。
+  它是 `wooldridge_did()` 之上的轻量别名，docstring 中附完整的参数映射表。
+- **`xvar=` 协变量异质性**（单个字符串或名称列表）。增加逐队列 × post ×
+  `(x_j − mean(x_j))` 的交互项；`detail` 新增 `slope_<x>` /
+  `slope_<x>_se` / `slope_<x>_pvalue` 列。基线 ATT 报告在每个协变量的样本
+  均值处。
+- **`panel=False` 的重复截面模式** —— 用队列 + 时间虚拟变量取代个体固定
+  效应（等价于 R 的 `etwfe(ivar=NULL)`）。
+- **`cgroup='nevertreated'`** —— 把逐队列回归限制在（队列 g）∪（从未接受
+  处理者）之内；按队列规模加权汇总（等价于 R 的 `etwfe(cgroup='never')`）。
+  默认值 `'notyet'` 保持此前 ETWFE 的行为。
+- **`sp.etwfe_emfx(result, type=…)`** —— 等价于 R `etwfe::emfx` 的四种汇总
+  方式：`'simple'`、`'group'`、`'event'`、`'calendar'`。
+  `include_leads=True` 会返回完整的事件时间输出，包含用于检验事前趋势的
+  处理前领先项（`rel_time = -1` 为参照类别）。
+
+### 新增 —— 一次调用的 DID 方法稳健性工作流
+
+- **`sp.did_summary()`** —— 在同一份数据上拟合五个现代错层 DID 估计量
+  （CS、SA、BJS、ETWFE、Stacked），并返回规整的对比表，逐方法给出
+  （估计值、SE、p、95% CI）。跨方法的均值 + 跨方法 SD 用于标记结果对方法
+  的敏感性。
+- **`include_sensitivity=True`** —— 把 Rambachan-Roth（2023）的崩溃值
+  `M*` 附到 CS 那一行上，从而在单次调用中给出三路的稳健性读数。
+- **`sp.did_summary_plot()`** —— 逐方法估计值的森林图，带跨方法均值线；
+  支持 `sort_by='estimate'`。
+- **`sp.did_summary_to_markdown()` / `_to_latex()`** —— 可直接投稿的导出
+  （GFM 表格 / booktabs LaTeX，并自动转义 `&`）。
+- **`sp.did_report(save_to=dir)`** —— 一次调用的打包输出，把
+  `did_summary.txt` / `.md` / `.tex` / `.png` / `.json` 写到指定目录。
+
+### 修复 —— 来自内部代码评审的 12 个问题
+
+阻塞项（C 级）：
+
+- `etwfe(xvar=…)` 现在会在协变量全为 NaN 或（近似）为常数时抛出清晰的
+  `ValueError`。此前会静默返回 `n_obs = 0, estimate = 0`。
+- `etwfe(panel=False, cgroup='nevertreated')` 现在抛出明确的
+  `NotImplementedError`，而不是静默回退到 `'notyet'`。
+- `did_summary` 现在会预先校验列名（抛出列出缺失列的 `KeyError`），并且只在
+  拟合循环内部捕获窄范围的估计器侧异常；用户在 `controls=` / `cluster=`
+  中的笔误会以正规错误的形式暴露出来。
+- `did_summary` 的结果现在能通过标准库序列化干净地往返（改用
+  `DIDSummaryResult(CausalResult)` 子类并带真正的 `.summary()` 方法，取代
+  此前绑定到闭包上的实例属性）。
+
+高危项：
+
+- `etwfe_emfx(type='event'/'calendar')` 现在通过在保存的事件研究 vcov 上做
+  delta 方法计算 SE，而不是用"系数相互独立"的近似。`model_info['se_method']`
+  会标明实际走的是哪条路径。
+- `etwfe_emfx(type='group')` 的头条 `se` / `pvalue` / `ci` 现在会被填充
+  （与底层拟合的总体 ATT 完全一致）。
+- `did_summary_plot` / `_to_markdown` / `_to_latex` 的校验统一到同一个哨兵
+  值 `model_info['_did_summary_marker']` 上。
+- `_etwfe_never_only` 不再在调用方的 DataFrame 上留下 `_ft_cache` 辅助列。
+- `_etwfe_with_xvar` 中的斜率索引现在按名称索引（`coef_index` 字典）；回归
+  测试验证把 `xvar=['x1','x2']` 与 `['x2','x1']` 对调时，按名称得到的斜率
+  完全相同。
+- `etwfe(panel=False)` 遇到秩亏设计时会发出 `RuntimeWarning` 并指向具体的
+  补救办法（此前会静默地落到 `pinv` 上）。
+
+### 测试
+
+- 新增测试模块 `tests/test_did_summary.py` —— 27 个用例，覆盖与直接调用各
+  估计量的一致性、导出格式、森林图渲染、`etwfe_emfx` 的往返、xvar / panel /
+  cgroup 各选项、上述 12 项评审修复，以及 `include_leads` 模式。
+## \[0.7.0\] - 2026-04-14
+
+本次聚焦式发布达成与 R `did` / `HonestDiD` 包以及 Python `csdid` /
+`differences` 包在错层双重差分上的功能对等。所有核心算法都依据原始论文
+重新实现 —— **没有包装层，对上游 DID 包没有运行时依赖**。完整的 DiD 测试
+套件：47 → 170+（含实现完成后的三轮审计，在发布前发现并修复了 9 个缺陷）。
+
+### 新增 —— 核心估计
+
+- **`sp.aggte(result, type=...)`** —— 面向 `callaway_santanna()` 结果的统一
+  汇总层。四种汇总方案（`simple`、`dynamic`、`group`、`calendar`），由同一个
+  加权影响函数引擎支撑。见 Callaway & Sant'Anna（2021）第 4 节。
+- **Mammen（1993）乘子 bootstrap** —— IQR 重标度的逐点标准误，*以及*跨汇总
+  维度的同时（一致 / sup-t）置信带。与 R `did::aggte` 的一致带行为一致。
+- **`balance_e` / `min_e` / `max_e`** —— 事件研究的队列平衡与窗口截断
+  （CS2021 式 3.8）。
+- **`callaway_santanna()` 上的 `anticipation=δ` 参数** —— 按 CS2021 §3.2
+  把基准期向后推移 δ 期。
+- 通过 `callaway_santanna(panel=False)` 支持**重复截面** —— 带观测层面影响
+  函数的无条件 2×2 单元均值 DID（CS2021 式 2.4 的 RCS 版本）。可选的
+  `x=[...]` 协变量残差化用于回归调整。所有下游模块（`aggte`、`cs_report`、
+  `ggdid`、`honest_did`）都可以在 RCS 结果上直接工作，无需改动代码。
+- **dCDH 联合推断**（`did_multiplegt`）—— `joint_placebo_test`（跨安慰剂
+  滞后期的 Wald χ²，配合 bootstrap 协方差，dCDH 2024 §3.3）与
+  `avg_cumulative_effect`（dynamic\[0..L\] 的均值，SE 保留跨期协方差，
+  dCDH 2024 §3.4）。
+- **`sp.bjs_pretrend_joint()`** —— 面向 BJS 插补结果的聚类 bootstrap 联合
+  Wald 事前趋势检验。把默认的 Σz² 检验（它假设各事前期相互独立）升级为
+  完整考虑协方差的统计量。
+
+### 新增 —— 报告与可视化
+
+- **`sp.cs_report(data, ...)`** —— 一次调用的报告卡。在单一 bootstrap 种子
+  下跑完整流水线（ATT(g,t) → 四种带一致带的汇总 → 事前趋势 Wald → 每个事后
+  事件时间的 Rambachan–Roth 崩溃值 M\*），并美化打印结果。返回结构化的
+  `CSReport` 数据类。
+- **`sp.ggdid(result)`** —— 面向 `aggte()` 输出的绘图例程，对标 R 的
+  `did::ggdid`。按汇总类型自动分发；在逐点 CI 之上叠加一致带。
+- **`CSReport.plot()`** —— 一次调用的 2×2 汇总图：事件研究 + 一致带
+  （左上）、逐队列的 θ(g)（右上）、逐日历时间的 θ(t)（左下）、
+  Rambachan–Roth 崩溃值 M\* 条形图（右下）。
+- **`CSReport.to_markdown()`** —— GitHub 风格的 Markdown 导出，整数列渲染
+  正确，并带可配置的 `float_format`。
+- **`CSReport.to_latex()`** —— 包在 `table` 浮动体中的、可直接投稿的
+  booktabs 片段。零 `jinja2` 依赖（手写的 booktabs 渲染器）；自动转义 LaTeX
+  特殊字符。
+- **`CSReport.to_excel()`** —— 六个工作表的工作簿（`Summary`、`Dynamic`、
+  `Group`、`Calendar`、`Breakdown`、`Meta`）。引擎自动选择
+  （openpyxl → xlsxwriter），两者都未安装时给出清晰的 ImportError。
+- **`cs_report(..., save_to='prefix')`** —— 一次调用导出完整的导出矩阵：
+  单次调用即写出 `<prefix>.{txt,md,tex,xlsx,png}`，并自动创建缺失的父目录。
+  可选依赖（openpyxl、matplotlib）会被静默跳过，因此最小安装仍能产出
+  text + md + tex。
+- **`sp.did(..., aggregation='dynamic', n_boot=..., random_state=...)`**
+  —— 顶层分发器现在会转发 CS 风格的参数（`aggregation`、`panel`、
+  `anticipation`），并能在单次调用中把 CS 结果直接送进 `aggte()`。
+
+### 变更
+
+- **`sun_abraham()` 的推断层重写** —— 用 Liang–Zeger 聚类稳健三明治估计量
+  `(X'X)⁻¹ Σ_c X_c' u_c u_c' X_c (X'X)⁻¹`（带小样本调整）取代此前临时的
+  `√(σ²/(total·T))` 近似，并用 delta 方法给出 IW 汇总的 SE `w' V_β w`、
+  迭代式的双向组内变换（在不平衡面板上成立），以及按 SA 2021 §6 可选的
+  `control_group='lastcohort'`。
+- **`sp.honest_did()` / `sp.breakdown_m()` 改为多态** —— 现在既接受旧格式的
+  `callaway_santanna()` / `sun_abraham()` 结果（事件研究放在 `model_info`
+  中），*也*接受新的 `aggte(type='dynamic')` 格式（事件研究放在 `detail`
+  中，带 Mammen 一致带）。惯用的
+  `cs → aggte → honest_did → breakdown_m` 流水线现在无需手工接线即可端到端
+  跑通。
+- 新增 README 中的 DiD 对等性矩阵，在 15 项能力上把 StatsPAI 与 `csdid`、
+  `differences` 以及 R 的 `did` + `HonestDiD` 做对比。
+
+### 修复（来自发布前的多轮审计）
+
+- **关键 —— `aggte(type='dynamic').estimate`** 此前会把处理前*和*处理后的
+  事件时间一起平均进总体 ATT，使头条数字被安慰剂信号污染。现在只对 e ≥ 0
+  做平均，与 R `did::aggte` 的打印约定一致。在典型的 DGP 上，这个缺陷会让
+  所报告的总体值偏离近一倍。
+- **`CSReport.to_latex()` 中 LaTeX 转义的非幂等性**：先 `\` →
+  `\textbackslash{}`、再 `{` → `\{`，会把刚插入的花括号弄坏。改为单趟
+  `re.sub` 后修复。
+- **`cs_report(save_to='~/study/…')`** 不会展开 `~`；已通过
+  `os.path.expanduser` 修复。
+- **`cs_report(sa_result)` / `aggte(sa_result)`** 抛出晦涩的
+  `KeyError: 'group'`；两个入口现在都会预先检测非 CS 输入并抛出清晰的
+  `ValueError`。
+- **`cs_report(pre_fitted_cs, estimator=…)`** 会静默忽略覆盖参数；现在发出
+  `UserWarning`，列出每一个被遮蔽的参数。
+- **`sp.did(method='2x2', aggregation='dynamic')`** 会静默忽略仅 CS 适用的
+  参数；现在抛出信息充分的 `ValueError`。
+- **`bjs_pretrend_joint`** 会把所有异常都吞成"bootstrap 失败"；现在收窄到
+  预期的失败模式，并对非预期错误带上上下文重新抛出。
+- **`matplotlib.use('Agg')`** 在 `_save_report_bundle` 中不再无条件切换后端
+  （会尊重 Jupyter 会话）。
+
+### 参考文献
+
+- Callaway, B. and Sant'Anna, P.H.C. (2021). *J. of Econometrics* 225(2).
+- Sun, L. and Abraham, S. (2021). *J. of Econometrics* 225(2).
+- Mammen, E. (1993). *Ann. Statist.* 21(1).
+- Liang, K.-Y. and Zeger, S.L. (1986). *Biometrika* 73(1).
+- de Chaisemartin, C. and D'Haultfoeuille, X. (2020). *AER* 110(9).
+- de Chaisemartin, C. and D'Haultfoeuille, X. (2024). *RESt*, forthcoming.
+- Rambachan, A. and Roth, J. (2023). *Rev. Econ. Studies* 90(5).
+- Borusyak, K., Jaravel, X. and Spiess, J. (2024). *ReStud* 91(6).
+## \[0.6.2\] - 2026-04-12
+
+### 新增
+
+- **OLS 的 `predict()`**：`result.predict(newdata=)`，用于对 OLS 结果做
+  样本外预测
+- **`balance_panel()`**：只保留在每个时期都被观测到的单位的工具函数
+  （`sp.balance_panel()`）
+- **面板的 `balance=True`**：`sp.panel()` 中的便捷开关，在估计前自动平衡
+  面板
+- **DID 的分析权重**：为 `did()`、`ddd()` 与 `event_study()` 增加
+  `weights=` 参数，用于人口加权的估计（等价于 Stata 的 `[aweight=...]`）
+- **匹配的 `ps_poly=`**：多项式倾向得分设定（`ps_poly=2` 会增加交互项 /
+  平方项，参照 Cunningham 2021 第 5 章）
+- **合成控制的 `rmspe` 图**：事后 / 事前 RMSPE 之比的直方图
+  （`synthplot(result, type='rmspe')`），参照 Abadie 等（2010）
+- **合成控制的安慰剂缺口图**：带 `rmspe_threshold` 过滤的完整安慰剂缺口
+  路径（Abadie 等 2010，图 4）
+- **Graddy（2006）复现**：Fulton 鱼市场的 IV 示例加入 `sp.replicate()`
+  （Mixtape 第 7 章）
+- **数值验证测试**：对照 Stata/R 的参照值做交叉验证，并带人性化的错误
+  信息
+
+### 修复
+
+- **`outreg2` 的格式自动识别**：能正确地按文件名扩展名推断 `.xlsx` /
+  `.csv` / `.tex`
+- **合成控制的安慰剂 p 值**：现在使用 RMSPE 的*比值*（√post/√pre）而非
+  平方比，与 Abadie 等（2010）的约定一致
+
+### 改进
+
+- **DID/DDD/事件研究**：权重在 WLS 中传播，带正确的归一化与校验
+- **合成控制安慰剂**：保存完整的安慰剂缺口轨迹、逐单位的 RMSPE 比值与单位
+  标签，以便做更丰富的估计后分析
+- **匹配测试**：为 PSM、马氏距离匹配、CEM 与分层方法补充了全面的测试套件
+
+## \[0.6.1\] - 2026-04-07
+
+### 修复
+
+- **交互式编辑器 —— 主题切换**：现在在应用新主题前会完全重置，因此在主题
+  之间切换（例如 ggplot → academic）时会正确更新所有视觉属性，而不再泄漏
+  旧设置
+- **交互式编辑器 —— Apply 按钮**：修复了在 Layout 标签页上因面板溢出导致
+  Apply 按钮被裁切 / 隐藏的问题
+- **交互式编辑器 —— 面板布局**：修复了为把 Apply 按钮固定在底部而使用
+  flex 布局时，面板内容消失的问题
+- **交互式编辑器 —— Style 标签页**：修复了在把 Theme 标签页调整到第一位
+  之后，Style 标签页卡在"加载中"的问题
+- **交互式编辑器 —— 错误可见性**：widget 回调中的错误现在会显示在状态栏，
+  而不再被静默吞掉
+
+### 改进
+
+- **交互式编辑器 —— Auto 模式**：点击 Auto 现在总会刷新预览，给出即时的
+  视觉反馈
+- **交互式编辑器 —— Auto/手动开关**：紧凑的切换按钮移到面板头部，并采用
+  粘性定位
+- **交互式编辑器 —— Apply 按钮**：与 Auto 开关分离，放置在面板右下角以
+  获得更好的 UX
+- **交互式编辑器 —— Theme 标签页**：移到第一位以便更容易被发现
+- **交互式编辑器 —— 取色器**：所有颜色变更都增加了可视化的确认反馈
+- **交互式编辑器 —— 代码生成**：自动生成可复现的代码，并支持在编辑器中
+  选中文本
+- **智能推荐**：增强了对比与推荐的逻辑
+- **注册表**：扩展了注册表中的模块支持
+
+## \[0.1.0\] - 2024-07-26
+
+### 新增
+
+- **核心回归框架**
+  - 带公式接口的 OLS（普通最小二乘）回归
+  - 稳健标准误（HC0、HC1、HC2、HC3）
+  - 聚类标准误
+  - 加权最小二乘（WLS）支持
+- **因果推断模块**
+  - 受 Wager & Athey（2018）启发的因果森林实现
+  - 用于无偏处理效应估计的诚实估计
+  - 处理效应的 bootstrap 置信区间
+  - 公式接口：`"outcome ~ treatment | features | controls"`
+- **输出管理（outreg2）**
+  - 类似 Stata `outreg2` 的 Excel 导出功能
+  - 在单个输出中支持多个回归模型
+  - 可定制的格式化选项
+  - 专业化的表格排版
+- **统一的 API 设计**
+  - 一致的 `reg()` 函数接口
+  - 公式解析：R/Stata 风格的语法 `"y ~ x1 + x2"`
+  - 贯穿整个代码库的类型标注
+  - 全面的文档
+
+### 技术细节
+
+- 支持 Python 3.8+
+- 依赖：numpy、scipy、pandas、scikit-learn、openpyxl
+- MIT 许可
+- 全面的测试套件

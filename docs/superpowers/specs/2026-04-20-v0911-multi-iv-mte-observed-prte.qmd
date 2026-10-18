@@ -1,0 +1,142 @@
+# StatsPAI v0.9.11 —— 多工具变量 MTE + CHV-2011 观测倾向得分 PRTE
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计 → 实现
+
+## 1. 动机
+
+v0.9.10 发布了教科书式的 HV 潜变量 MTE，但留下了早前「非目标」清单里的两条
+线索：
+
+1. **多工具变量 MTE** —— `sp.bayes_mte` 的 `instrument` 只接受 `str`（标量），
+   迫使有 2 个以上工具变量的用户只能挑一个。其他所有贝叶斯估计器
+   （`sp.bayes_iv`、`sp.bayes_hte_iv`）都已支持 `instrument: str | list`；
+   MTE 是唯一不一致的那个。
+
+2. **真正的 CHV-2011 PRTE 构造器** —— v0.9.9 发布的
+   `sp.policy_weight_prte(shift)` 只是一个**风格化**的矩形权重，docstring
+   里也明确写了：真正的 CHV-2011 PRTE 需要观测倾向得分核。docstring 的示例
+   还让用户自己用 `gaussian_kde` 手写 `weight_fn`。v0.9.11 把它变成一行：
+   `sp.policy_weight_observed_prte(propensity_sample, shift)`。
+
+两者都是范围清晰的小改动，用来补齐公开的 API 缺口。
+
+## 2. 范围
+
+### v0.9.11 范围内
+
+- **`sp.bayes_mte(instrument: str | Sequence[str], ...)`** —— 接受多个工具
+  变量：
+  - 标量路径行为不变（API 向后兼容）。
+  - 列表路径：`Z` 变成 `(n, k)` 矩阵；第一阶段 logit 的
+    `pi_Z ~ Normal(0, σ, shape=k)`；`logit = pi_0 + Z @ pi_Z + ...`。
+- **`sp.policy_weight_observed_prte(propensity_sample, shift)`** —— CHV 2011
+  权重：`w(u) ∝ [f_P(u) - f_{P+Δ}(u)] / Δ`，其中 `f_P` 是观测倾向得分样本
+  的核密度估计。在传入 `policy_effect` 的网格上归一化为和为 1。
+- 保留风格化的 `sp.policy_weight_prte(shift)`，行为不变 —— 作为快速探索工具
+  仍然有用，且 docstring 已标明它是风格化的。
+
+### 范围之外（明确推迟）
+
+- 二元正态 HV 选择模型（带 `(U_0, U_1, V)` 协方差结构的 Heckman 式模型）。
+  这本身就是一个独立的设计问题，正确的做法是放到 0.9.12+。
+- 「新增一个工具变量」类的政策反事实 —— 需要专门的 API。
+- Rust 第二阶段。
+
+## 3. API 变更
+
+### 3.1 `bayes_mte(instrument: str | Sequence[str])`
+
+```python
+def bayes_mte(
+    data: pd.DataFrame,
+    y: str,
+    treat: str,
+    instrument: Union[str, Sequence[str]],   # 变更：原先是 str
+    covariates: Optional[List[str]] = None,
+    ...
+)
+```
+
+内部实现：
+- 归一化为列表：`iv_cols = [instrument] if isinstance(instrument, str) else list(instrument)`。
+- `Z = clean[iv_cols].to_numpy(dtype=float)` → 形状 `(n, k)`。
+- `_logit_propensity(Z, X, D)` 已经能处理二维 Z（见其中
+  `W = Z.reshape(-1, 1) if Z.ndim == 1 else Z` 分支 —— 没问题）。
+- PyMC 侧：`pi_Z = pm.Normal('pi_Z', mu=0, sigma=prior_coef_sigma, shape=k)`，
+  然后 `logit = pi_intercept + pm.math.dot(Z, pi_Z) + ...`。
+
+### 3.2 `sp.policy_weight_observed_prte(propensity_sample, shift)`
+
+```python
+def policy_weight_observed_prte(
+    propensity_sample: np.ndarray,
+    shift: float,
+    *,
+    bw_method: str | float | None = None,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """基于观测倾向得分分布、经高斯 KDE 构造的真正 CHV-2011 PRTE 权重。"""
+```
+
+实现要点：
+- 校验 `propensity_sample` 落在 `[0, 1]` 内（常规健全性检查）。
+- 校验 `shift` 在 `(-1, 1)` 内且非零（与 `policy_weight_prte` 一致）。
+- 构造 `kde = scipy.stats.gaussian_kde(propensity_sample, bw_method=bw_method)`。
+- 返回闭包 `w(u) -> (kde(u) - kde(u - shift)) / shift`，并从下方截断到 0
+  （负权重对 MTE 曲线做积分没有意义，通常只是网格边缘的伪影）。
+
+已处理的边界情形：
+- `shift > 0`：倾向得分的边际扩张（依从者上移）。
+- `shift < 0`：边际收缩（对抗者 / 收缩）。
+- `u - shift` 落在 `[0, 1]` 之外：kde 密度自然衰减；截断可避免出现负权重。
+
+### 3.3 导出接线
+
+把 `policy_weight_observed_prte` 加入 `sp.bayes.__all__` 与顶层 `__all__`。
+
+## 4. 文件计划
+
+| 文件 | 改动 |
+|---|---|
+| `src/statspai/bayes/mte.py` | `instrument: str \| Sequence[str]`、列表归一化、shape-k 的 `pi_Z` 先验 |
+| `src/statspai/bayes/policy_weights.py` | 新增函数 `policy_weight_observed_prte` |
+| `src/statspai/bayes/__init__.py` | 导出新构造器 |
+| `src/statspai/__init__.py` | 顶层导出 |
+| `tests/test_bayes_mte_multi_iv.py` | 新增 —— 多 IV 还原 + 标量向后兼容 |
+| `tests/test_bayes_mte_policy.py` | 扩展 `policy_weight_observed_prte` 相关测试 |
+| `pyproject.toml` | `version = "0.9.11"` |
+| `CHANGELOG.qmd` | 0.9.11 条目 |
+
+## 5. 测试计划
+
+- `test_bayes_mte_multi_instrument_scalar_back_compat` —— 传入单元素列表与
+  传入标量，在抽样噪声范围内得到相同后验。
+- `test_bayes_mte_multi_instrument_recovery` —— 双 IV 的 DGP，两个第一阶段
+  系数都可识别；MTE 多项式仍能还原真实值。
+- `test_bayes_mte_multi_instrument_model_info` —— `model_info['instruments']`
+  报告列表。
+- `test_policy_weight_observed_prte_returns_callable`。
+- `test_policy_weight_observed_prte_input_validation` —— 拒绝越界样本、
+  零 shift、以及超出 `(-1,1)` 的 shift。
+- `test_policy_weight_observed_prte_positive_shift_yields_marginal_mass` ——
+  在均匀倾向得分样本上取 shift=0.1，权重应在被诱导出的边际附近达到峰值。
+- `test_policy_weight_observed_prte_integrates_with_policy_effect` —— 端到端：
+  拟合 MTE，调用 `r.policy_effect(sp.policy_weight_observed_prte(r._propensity_sample, 0.1))`，
+  返回有限的后验。
+
+## 6. 成功标准
+
+1. 多工具变量 `bayes_mte` 能在双 IV DGP 上运行，并在 n=600 时于 HDI 内还原
+  真实 MTE 多项式。
+2. `policy_weight_observed_prte(uniform_sample, shift=0.1)` 在均匀倾向得分
+   DGP 上返回的质量集中在 `u ∈ [0.5-0.05, 0.5+0.05]` 附近（健全性检查）。
+3. 标量工具变量调用保持向后兼容（现有测试行为不变）。
+4. 两轮代码评审 —— 无阻塞发布的问题。
+5. 全量回归维持在既有的 flaky 基线内（以「隔离重跑即通过」为标准的
+   ≤ 2 个既有 flaky）。
+
+## 7. 非目标
+
+- 二元正态 HV（推迟）。
+- 按工具变量分别构造政策权重（推迟）。
+- MTE 第一阶段的工具变量强度诊断（用户可自行对输入调用
+  `sp.check_identification`）。

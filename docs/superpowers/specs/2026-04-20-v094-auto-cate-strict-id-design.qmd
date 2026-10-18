@@ -1,0 +1,210 @@
+# StatsPAI v0.9.4 —— `sp.auto_cate()` + 严格识别诊断
+
+**作者：** Bryce Wang · **日期：** 2026-04-20 · **状态：** 设计
+
+## 1. 动机
+
+0.9.4 的发布回顾（`社媒文档/4.20-升级说明/StatsPAI-0.9.3之后的一周...`）在 0.9.3 之后公开承诺了两个具体的下一步：
+
+1.  **"下一步打算加 `strict_mode=True`"** —— 加在 `sp.check_identification` 上，让设计层面的阻塞项不可被忽略。
+2.  **"下一步：`sp.auto_cate()` 一键多学习器比赛"** —— 补齐第 8 节指出的 *"ML CATE 调度不如 econml"* 这一差距。
+
+本规范把这两个承诺落地为 v0.9.4。
+
+## 2. 范围
+
+### 范围内
+
+- `sp.auto_cate()` —— 一行代码在 S/T/X/R/DR-Learner 之间做 CATE 学习器 竞赛，用诚实的交叉拟合评分（R-loss）与 BLP 校准。
+- `check_identification` 上的 `strict_mode=True` —— 存在阻塞项时抛出 `IdentificationError`。
+- 在顶层导出 `IdentificationError` 异常类型。
+- 在 `check_identification` 内部加入 IV 专属的第一阶段强度检查（Stock–Yogo 经验法则 F \< 10）。
+- 版本号 `0.9.3 → 0.9.4`。
+- 测试覆盖：`auto_cate` 至少 10 个新测试，`strict_mode` / IV 强度至少 4 个新测试。
+
+### 范围之外（推迟到 0.9.5+）
+
+- Optuna 超参数搜索（我们依赖合理的默认值；用户可自行传入调好参数的 估计器）。
+- `sp.bayes_did` / `sp.bayes_rd`（贝叶斯因果 —— 仅在 0.9.5 预览）。
+- Rust 内核。
+- 超出现有能力的 `'ate'` / 深度 `'rct'` 设计分支。
+
+## 3. `sp.auto_cate()` —— 设计
+
+### 3.1 签名
+
+``` python
+def auto_cate(
+    data: pd.DataFrame,
+    y: str,
+    treat: str,
+    covariates: list[str],
+    learners: Sequence[str] = ('s', 't', 'x', 'r', 'dr'),
+    outcome_model=None,
+    propensity_model=None,
+    cate_model=None,
+    n_folds: int = 5,
+    score: str = 'r_loss',          # 'r_loss' | 'dr_mse' | 'tau_risk'
+    alpha: float = 0.05,
+    random_state: int = 42,
+) -> AutoCATEResult
+```
+
+### 3.2 算法
+
+1.  校验输入（处理变量为二值、列存在、相关列无缺失值）。
+2.  **一次性**交叉拟合冗余参数 —— 通过 K 折得到单一的 `m_hat = E[Y|X]` 与 `e_hat = P(D=1|X)` —— 供各学习器复用，用于计算诚实的 R-loss 评分。
+3.  对每个被请求的学习器：
+    a.  用现有的 `metalearner(...)` 拟合 —— 得到 ATE、SE、CI、样本内 CATE。
+    b.  通过折外重拟合计算**诚实的 CATE 预测**（K 折；每折重新拟合学习器， 在留出折上预测）。
+    c.  在留出预测上计算 **R-loss 评分**： `R(τ̂) = E[((Y − m̂) − τ̂(X)·(D − ê))²]`。越小越好 （Nie & Wager 2021）。
+    d.  用现有的 `blp_test` 跑 **BLP 校准检验**（β₁ ≈ 1，β₂ \> 0 且显著）。
+4.  组装排行榜 DataFrame。
+5.  选取 `best_learner`：在 BLP β₁ 未显著低于 1（按 `alpha`）的学习器中， 取 `r_loss` 最低者（若无一通过，则回退为全体取 argmin）。
+6.  返回 `AutoCATEResult`。
+
+### 3.3 `AutoCATEResult`
+
+一个数据类，包含：
+
+| 字段 | 类型 | 说明 |
+|------------------------|------------------------|------------------------|
+| `leaderboard` | `pd.DataFrame` | 每个学习器一行：`learner, ate, se, ci_lower, ci_upper, r_loss, blp_beta1, blp_beta1_pvalue, blp_beta2, blp_beta2_pvalue, cate_std, cate_iqr` |
+| `best_learner` | `str` | 选出的胜者（`'S-Learner'` / `'T-Learner'` / ...） |
+| `best_result` | `CausalResult` | 胜者的完整 CausalResult（具备 `.tidy()`、`.glance()`、`.summary()`） |
+| `results` | `dict[str, CausalResult]` | 所有已拟合学习器，以短名为键 |
+| `agreement` | `pd.DataFrame` | 各学习器 CATE 向量（样本内）的 Pearson-ρ 矩阵 —— 一致性高 ⇒ 异质性稳定，低 ⇒ 依赖具体模型 |
+| `selection_rule` | `str` | 人类可读的说明（`"lowest R-loss among BLP-calibrated learners"`） |
+| `n_obs` | `int` | 样本量 |
+
+`AutoCATEResult.summary()` → 美化打印的排行榜 + 一致性矩阵 + 推荐结论。
+
+### 3.4 评分：诚实的 R-loss
+
+为什么用 R-loss：与 ATE 的 bootstrap 标准误（它度量的是均值的方差）不同， R-loss 直接衡量留出数据上的 **CATE 预测质量**。这是与 econml / grf 对齐的 准则。它对 S/T/X/R/DR 统一适用，因为它只依赖留出的 τ̂(X)、m̂(X)、ê(X)。
+
+实现：对每个学习器跑 K 折 —— 在训练折上拟合学习器，在测试折上预测 τ̂。 使用**已经交叉拟合好的** m̂ 与 ê，在留出行上计算 `((Y − m̂) − τ̂·(D − ê))²`，再跨折取平均。
+
+学习器选择的打破平局规则：
+
+```         
+candidates = BLP β1 在 alpha 水平下未被判定为 < 1 的学习器
+if candidates 非空:
+    winner = candidates 中 r_loss 最小者
+else:
+    winner = 全体学习器中 r_loss 最小者
+```
+
+## 4. `check_identification` 上的 `strict_mode`
+
+### 4.1 API 变更
+
+``` python
+def check_identification(..., strict: bool = False) -> IdentificationReport:
+    ...
+    if strict and report.verdict == 'BLOCKERS':
+        raise IdentificationError(report)
+    return report
+```
+
+参数名：`strict`（而非 `strict_mode` —— 遵循 scikit / statsmodels 的短布尔 标志约定）。
+
+### 4.2 `IdentificationError`
+
+``` python
+class IdentificationError(ValueError):
+    """当 `check_identification(strict=True)` 发现 BLOCKER 级别的结论时抛出。"""
+    def __init__(self, report: IdentificationReport):
+        self.report = report
+        blocker_msgs = [f.message for f in report.findings if f.severity == 'blocker']
+        msg = (
+            f"Design has {len(blocker_msgs)} identification blocker(s):\n  - "
+            + "\n  - ".join(blocker_msgs)
+            + "\n\nPass strict=False to receive a report instead of an exception."
+        )
+        super().__init__(msg)
+```
+
+以 `sp.IdentificationError` 导出。
+
+## 5. IV 强度检查
+
+在 `identification.py` 内增加 `_check_iv_strength(data, treatment, instrument, findings)`：
+
+- 计算 `treatment ~ instrument` 的第一阶段 F（最小检查不含协变量；若给了 协变量则先做偏投影）。
+- F \< 10 → 警告（Stock–Yogo 经验法则）。
+- F \< 5 → 阻塞项（弱工具变量，推断无效）。
+- 产出 `evidence={'first_stage_f': ...}`。
+
+当 `instrument is not None` 或 `design == 'iv'` 时，在 `check_identification` 内部调用。
+
+## 6. 文件计划
+
+| 文件 | 改动 |
+|-------------------------------|-----------------------------------------|
+| `src/statspai/metalearners/auto_cate.py` | **新增** —— `auto_cate` + `AutoCATEResult`（约 350 行） |
+| `src/statspai/metalearners/__init__.py` | 导出 `auto_cate`、`AutoCATEResult` |
+| `src/statspai/smart/identification.py` | 增加 `IdentificationError`、`strict` 参数、`_check_iv_strength` |
+| `src/statspai/smart/__init__.py` | 导出 `IdentificationError` |
+| `src/statspai/__init__.py` | 顶层导出：`auto_cate`、`AutoCATEResult`、`IdentificationError` |
+| `tests/test_auto_cate.py` | **新增** —— 不少于 10 个测试 |
+| `tests/test_check_identification.py` | 至少 4 个新测试（strict、IV 强度） |
+| `pyproject.toml` | `version = "0.9.4"` |
+| `CHANGELOG.qmd` | 增加 0.9.4 条目 |
+
+## 7. 测试计划
+
+### 7.1 `test_auto_cate.py`
+
+1.  `test_auto_cate_basic_api` —— 返回的 AutoCATEResult 具备预期属性。
+2.  `test_auto_cate_leaderboard_shape` —— 排行榜的行数与请求的学习器数一致。
+3.  `test_auto_cate_recovers_ate_on_constant_effect_dgp` —— best_result.estimate 落在 3.0 的 3σ 之内。
+4.  `test_auto_cate_all_learners_positive_on_positive_dgp` —— 每个 ATE 都为正。
+5.  `test_auto_cate_learner_subset` —— 传入 `learners=['t','dr']` 时只跑这两个。
+6.  `test_auto_cate_invalid_learner_raises` —— `learners=['bogus']` 应报错。
+7.  `test_auto_cate_selection_rule_string_nonempty` —— 有可读的解释说明。
+8.  `test_auto_cate_agreement_matrix_shape` —— N×N 且对角线为 1。
+9.  `test_auto_cate_best_result_is_causal_result` —— `.tidy()` 与 `.glance()` 可用。
+10. `test_auto_cate_custom_models_override_defaults` —— 传入 RandomForest 仍能工作。
+11. `test_auto_cate_summary_string` —— `summary()` 输出非空且提及胜者。
+12. `test_auto_cate_available_at_sp_top_level` —— `sp.auto_cate is ...`。
+
+### 7.2 `test_check_identification.py` 的新测试
+
+1.  `test_strict_mode_raises_on_blocker` —— 完全分离 DGP + `strict=True` → 抛出 `IdentificationError`。
+2.  `test_strict_mode_allows_warnings` —— 仅有警告时不应抛出。
+3.  `test_strict_mode_default_is_non_strict` —— 默认行为不变。
+4.  `test_iv_weak_instrument_flagged` —— `cor(z, d) ≈ 0` → 第一阶段 F 极小 → 产出阻塞项/警告。
+5.  `test_iv_strong_instrument_passes` —— `cor(z, d) = 0.7` → 无 IV 强度警告。
+
+## 8. 非目标 / 权衡
+
+- **不做 Optuna** —— v0.9.4 要在数小时内发出，而不是数天。`auto_cate` 之所以仍然「自动」，是因为它让学习器互相竞赛并按 R-loss 选优；超参数 搜索可以之后通过 `cate_model=` / `outcome_model=` 叠加。
+- **默认用 R-loss 而非 DR-loss** —— DR-loss 需要为每个学习器显式给出 φ 的方差所需冗余参数，而 R-loss 是对称的，且复用共享的冗余参数。
+- **一致性用 CATE 向量的相关性** —— 这不是正式的检验；文档里把它写为 *健全性检查*，而非推断对象。
+- **IV 强度检查是最小实现** —— 不含 Kleibergen-Paap、不含 Montiel-Olea-Pflueger；它们仍留在 `sp.iv.weakiv_tests` 中并在 IV 指南里 有文档。这里的诊断是「第一道绊线」，不替代专门的检验。
+
+## 9. 成功标准
+
+1.  `pytest tests/test_auto_cate.py tests/test_check_identification.py tests/test_metalearners.py -q` → 全绿。
+
+2.  全量 `pytest tests/ -q` 相对改动前基线**无新增失败**。
+
+3.  能端到端执行 README 风格的片段：
+
+    ``` python
+    import statspai as sp
+    result = sp.auto_cate(df, y='y', treat='d', covariates=['x1','x2'])
+    print(result.summary())
+    ```
+
+4.  `sp.check_identification(df, ..., strict=True)` 在存在阻塞项的 DGP 上抛出 `sp.IdentificationError`，在 OK / WARNINGS 的 DGP 上不抛出。
+
+5.  `sp.__version__ == '0.9.4'`。
+
+## 10. 提交与发布顺序
+
+1.  在 `main` 上实现 + 写测试（按用户偏好：直接推送，不建 PR）。
+2.  跑聚焦测试 → 跑全量测试 → 自审代码一遍 → 提交。
+3.  更新 CHANGELOG + 在 pyproject 中递增版本 → 单个提交。
+4.  推送到 `main`。

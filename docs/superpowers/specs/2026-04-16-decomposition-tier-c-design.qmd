@@ -1,0 +1,237 @@
+# StatsPAI 分解分析 —— Tier C 设计
+
+**日期：** 2026-04-16 **作者：** Bryce Wang + Claude **状态：** 已批准，授权执行 **范围：** Tier C —— 完整分解套件，含因果视角、不平等分解、Kitagawa 标准化与生态集成。
+
+------------------------------------------------------------------------
+
+## 1. 目标
+
+在 Python 中构建世界上最强的分解分析工具箱，在统一 API —— `sp.decompose(method=...)` —— 之下覆盖均值、分布、不平等、人口学与因果 分解。
+
+**竞争目标：** 一次到位地击败 Stata `ddecompose`（Rios-Avila 2024）、Stata `cdeco`、R `Counterfactual`、R `ddecompose`，并占据 Python 侧尚属空白的 高地。
+
+------------------------------------------------------------------------
+
+## 2. 方法覆盖（11 个模块中的 18 种方法）
+
+### 2.1 均值分解（`oaxaca.py`，已有 —— 增强）
+
+- 三分解 Oaxaca-Blinder ✓（已有）
+- 5 种参照系数：A 组、B 组、合并（Neumark）、Cotton、Reimers ✓（已有）
+- **新增**：Oaxaca-Ransom（1994）带组虚拟变量的合并参照
+- **新增**：Yun（2005）对分类协变量的归一化（对省略类别不变）
+- **新增**：Bootstrap 标准误（分层、聚类稳健）
+- **新增**：Jann 式的详细分解，同时给出可解释侧与不可解释侧
+- **新增**：支持样本权重
+- Gelbach（2016）✓（已有，保留）
+
+### 2.2 RIF 回归与分解（`rif.py`，已有 —— 增强）
+
+- 分位数 / 方差 / 基尼系数的 RIF 值 ✓（已有）
+- **新增**：IQR、Atkinson 指数、Theil 指数、对数方差的 RIF
+- **新增**：详细的系数侧贡献（不只是可解释部分）
+- **新增**：多个参照组（0、1、合并）
+- **新增**：Bootstrap 标准误
+- **新增**：重加权调整（FFL 两步法）
+
+### 2.3 FFL 详细分布分解（`ffl.py`，新增）
+
+- Firpo-Fortin-Lemieux（2009, 2018）两步法：
+  1.  重加权（DFL）以隔离构成效应
+  2.  在重加权样本上做 RIF 回归以得到结构效应
+- 在任意 τ、方差、基尼系数等处的详细分解
+- 跨分位数汇总 → 分位数过程
+
+### 2.4 DFL 重加权（`dfl.py`，新增）
+
+- DiNardo, Fortin, Lemieux（1996）的分布重加权
+- 用 logit/probit 倾向得分构造权重
+- 反事实密度、分位数、CDF
+- 支持 Hirano-Imbens-Ridder 稳定化权重
+- 可选的熵平衡权重（Hainmueller 2012）作为替代
+- 全分布的点态 + 一致置信带（bootstrap）
+
+### 2.5 Machado-Mata 分位数分解（`machado_mata.py`，新增）
+
+- Machado & Mata（2005）：分位数回归 + 重抽样
+- 在每个 τ ∈ (0,1) 处的详细分解
+- 可选的 Albrecht-Björklund-Vroman 扩展
+- Bootstrap 推断
+
+### 2.6 Melly 基于模拟的分解（`melly.py`，新增）
+
+- Melly（2005, 2006）：对 τ 积分分位数回归系数
+- 比 Machado-Mata 更快、更一致
+- 同时支持条件与无条件分解
+
+### 2.7 Chernozhukov-Fernández-Val-Melly 反事实分布（`cfm.py`，新增）
+
+- CFM 2013：分布回归 / 分位数回归 / 持续期回归
+- 反事实 CDF F\_{Y⟨j\|k⟩}
+- 分位数函数 Q\_{Y⟨j\|k⟩}
+- 通过经验 bootstrap + Khmaladze 变换（可选）得到一致置信带
+- KS、CvM 分布相等性检验
+- 在任意泛函（Lorenz、GL、方差、分位数比）上的详细分解
+
+### 2.8 非线性分解（`nonlinear.py`，新增）
+
+- Fairlie（1999, 2005）用于二值结果（logit/probit）
+- Bauer-Sinning（2008, 2010）扩展
+- Yun（2005）非线性 Oaxaca
+- Powers-Yun（2011）多元非线性（等价于 `mvdcmp`）
+
+### 2.9 不平等分解（`inequality.py`，新增）
+
+- **按子群体**（组间/组内）：Theil T、Theil L、Atkinson、MLD、半平方 CV、基尼
+- **按来源**：Lerman-Yitzhaki（1985）基尼来源分解
+- **Shapley**（Shorrocks 2013）：通过 RIF + Shapley 值把不平等归因到各协变量
+- 支持样本权重
+- Bootstrap 推断
+
+### 2.10 Kitagawa 与 Das Gupta 标准化（`kitagawa.py`，新增）
+
+- Kitagawa（1955）直接标准化
+- Das Gupta（1993）多元分解（多因素的「率 × 构成」）
+- 支持任意加总量（率、均值、比例）
+
+### 2.11 因果分解（`causal.py`，新增）
+
+- **Jackson-VanderWeele（2018）** 因果分解：
+  - 总差异 → 初始部分 + 持续部分（把中介变量置为参照水平）
+- **VanderWeele 四路分解**：自然直接、自然间接、中介交互、参照交互
+- **Lundberg（2021）缺口闭合估计量**：
+  - IPW、回归、双重稳健（AIPW）三个版本
+  - 在反事实协变量偏移下闭合均值缺口
+- 敏感性界限（占位实现：接到 `sp.bounds` 模块）
+
+### 2.12 可视化（`plots.py`，新增）
+
+- **瀑布图** —— 详细分解（均值与分布）
+- **分位数过程图** —— 可解释/不可解释部分随 τ 变化，带置信带
+- **反事实 CDF / 密度** —— 观测值与反事实值叠加
+- **RIF 热力图** —— 变量 × 分位数的贡献网格
+- **Shapley 矩形树图** —— 不平等分解
+- 全部返回 `(fig, ax)` 以便用户自定义
+
+### 2.13 数据集（`datasets.py`，新增）
+
+- `cps_wage()` —— 类 CPS 的 Mincer 工资数据（生成的、缺口贴近真实）【性别缺口】
+- `chilean_households()` —— 合成的城镇/农村收入
+- `mincer_wage_panel()` —— 工资结构前后变化
+- `disparity_panel()` —— 用于因果分解的合成面板
+
+### 2.14 统一分发器（`dispatcher.py` + `__init__.py`）
+
+``` python
+sp.decompose(
+    method='oaxaca' | 'rif' | 'ffl' | 'dfl' | 'machado_mata' | 'melly' |
+           'cfm' | 'fairlie' | 'bauer_sinning' | 'yun_nonlinear' |
+           'inequality' | 'shapley_inequality' | 'kitagawa' |
+           'das_gupta' | 'causal_jvw' | 'gap_closing' | 'gelbach',
+    data=df, **method_kwargs,
+)
+```
+
+返回各方法专属的结果类；全部实现 `.summary()`、`.plot()`、`.to_latex()`、 `._repr_html_()`。
+
+------------------------------------------------------------------------
+
+## 3. 架构
+
+### 3.1 文件布局
+
+```         
+src/statspai/decomposition/
+├── __init__.py           # 导出 + 统一分发器导入
+├── _common.py            # 共享的 OLS/logit/bootstrap 辅助函数
+├── oaxaca.py             # [已有] + Yun、Oaxaca-Ransom、bootstrap
+├── rif.py                # [已有] + IQR/Atkinson/Theil、详细系数、bootstrap
+├── nonlinear.py          # 新增
+├── dfl.py                # 新增
+├── machado_mata.py       # 新增
+├── melly.py              # 新增
+├── cfm.py                # 新增
+├── ffl.py                # 新增
+├── inequality.py         # 新增
+├── kitagawa.py           # 新增
+├── causal.py             # 新增
+├── datasets.py           # 新增
+├── plots.py              # 新增
+└── dispatcher.py         # 新增 — sp.decompose()
+```
+
+### 3.2 依赖
+
+- 核心：numpy、scipy、pandas（已是项目标准）
+- 可选：matplotlib（绘图）、statsmodels（用于分位数回归加速）、sklearn（用于倾向得分）
+- 所有新模块在缺少可选依赖时都能优雅降级
+
+### 3.3 结果类契约
+
+每个方法返回的结果对象都要提供：
+
+- `.summary() → str`（同时打印）
+- `.plot() → (fig, ax)`（在有意义时）
+- `.to_latex() → str`
+- `._repr_html_() → str`（用于 Jupyter）
+- `.__repr__() → str`（简短一行）
+- 表格数据可通过 `.table` 或具名属性访问
+
+### 3.4 推断选项（统一）
+
+- `inference='analytical'` —— delta 方法 / 影响函数（快，默认）
+- `inference='bootstrap'` —— 分层/聚类 bootstrap，带 `n_boot` 参数
+- `inference='none'` —— 只要点估计（最快）
+
+------------------------------------------------------------------------
+
+## 4. 向后兼容
+
+所有现有公开 API 保持不变：
+
+- `sp.oaxaca(...)` —— 签名不变，可接受新的 kwargs
+- `sp.gelbach(...)` —— 不变
+- `sp.rifreg(...)` —— 不变
+- `sp.rif_decomposition(...)` —— 不变
+- `OaxacaResult`、`GelbachResult`、`RIFResult`、`RIFDecompositionResult` —— 不变
+
+新的统一入口 `sp.decompose(method='oaxaca', ...)` 只是对现有函数的包装。
+
+------------------------------------------------------------------------
+
+## 5. 测试策略
+
+`tests/test_decomposition_tier_c.py` —— 单文件覆盖：
+
+- 每个新方法：冒烟测试（能无错运行、形状正确）
+- 每个新方法：数值健全性（对照已知闭式解或模拟结果）
+- API 一致性：`.summary()` 返回字符串，matplotlib 可用时 `.plot()` 能工作
+- 统一分发器：每个方法都能通过 `sp.decompose(method=...)` 触达
+
+现有的 `tests/test_oaxaca*.py` / `tests/test_rif*.py` 继续通过。
+
+------------------------------------------------------------------------
+
+## 6. 提交计划
+
+1.  规范文档（本文件）
+2.  `_common.py` + 对 `oaxaca.py`、`rif.py` 的增强
+3.  `dfl.py` + `ffl.py`
+4.  `machado_mata.py` + `melly.py` + `cfm.py`
+5.  `nonlinear.py` + `inequality.py`
+6.  `kitagawa.py` + `causal.py`
+7.  `plots.py` + `datasets.py` + `dispatcher.py` + `__init__.py`
+8.  测试与缺陷修复
+9.  最终文档更新 + 版本号递增
+
+直接推送到 `main`（按用户偏好）。
+
+------------------------------------------------------------------------
+
+## 7. 本冲刺范围之外
+
+- CFM 的完整 Khmaladze 检验实现（仅留占位；标记为未来工作）
+- 动态治疗方案的分解（过于探索性）
+- Blundell-Dias-Meghir 纵向分解（后续再加）
+- 交互式仪表盘（`sp.decompose_dashboard()`）—— 未来
+- R/Stata 调用出口（`compat/`）—— 未来
