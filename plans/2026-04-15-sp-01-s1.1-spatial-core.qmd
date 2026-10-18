@@ -1,32 +1,32 @@
-# SP-01 S1.1 — Spatial Core Implementation Plan
+# SP-01 S1.1 —— 空间核心实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agent 执行者：** 必需子技能：使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务逐条实施本计划。步骤使用复选框 （`- [ ]`）语法以便跟踪进度。
 
-**Goal:** Close the largest ecosystem gap in StatsPAI by shipping a sparse-backed spatial weights layer, the full PySAL-equivalent ESDA suite, spatial regression models (ML + GMM) with LeSage-Pace impacts, and LM diagnostics — all interoperable with libpysal but independently implemented.
+**目标：** 通过交付一个稀疏矩阵支撑的空间权重层、全套对标 PySAL 的 ESDA 工具、带 LeSage-Pace 效应分解的空间回归模型（ML + GMM）以及 LM 诊断，来补齐 StatsPAI 最大的生态短板——全部可与 libpysal 互操作，但 均为独立实现。
 
-**Architecture:** Three-layer module under `src/statspai/spatial/`. Layer 1 (`weights/`) owns a sparse CSR-backed `W` class and six constructors. Layer 2 (`esda/`) owns six permutation-based spatial statistics. Layer 3 (`models/`) owns ML (concentrated likelihood, dual log-det path) and GMM (Kelejian-Prucha) estimators, plus LM tests and impacts. Existing `sp.sar/sem/sdm` are preserved as thin forwarders; backward-compat is enforced by a regression test against saved outputs.
+**架构：** `src/statspai/spatial/` 下的三层模块。第 1 层（`weights/`） 持有一个基于 CSR 稀疏矩阵的 `W` 类与六个构造器。第 2 层（`esda/`）持有 六个基于置换的空间统计量。第 3 层（`models/`）持有 ML（集中似然、双 路径 log-det）与 GMM（Kelejian-Prucha）估计量，外加 LM 检验与效应分解。 现有的 `sp.sar/sem/sdm` 保留为薄转发层；向后兼容由针对已保存输出的回归 测试来保证。
 
-**Tech Stack:** numpy, scipy.sparse, scipy.stats, scipy.optimize, pandas, formulaic (already a dep via existing spatial module). Soft deps: geopandas, libpysal (lazy-imported, test-skipped if absent), matplotlib (for plots).
+**技术栈：** numpy、scipy.sparse、scipy.stats、scipy.optimize、pandas、 formulaic（已通过现有 spatial 模块成为依赖）。软依赖：geopandas、 libpysal（惰性导入，缺失时跳过测试）、matplotlib（绘图）。
 
-**Parent spec:** [`specs/2026-04-15-sp-01-spatial-full-stack-design.qmd`](../specs/2026-04-15-sp-01-spatial-full-stack-design.qmd)
+**父规范：** [`specs/2026-04-15-sp-01-spatial-full-stack-design.qmd`](../specs/2026-04-15-sp-01-spatial-full-stack-design.qmd)
 
----
+------------------------------------------------------------------------
 
-## File structure
+## 文件结构
 
-```
+```         
 src/statspai/spatial/
-├─ __init__.py                  # flat re-exports
-├─ models.py                    # EXISTING — becomes thin shim after refactor
+├─ __init__.py                  # 扁平再导出
+├─ models.py                    # 已存在 —— 重构后变为薄壳
 ├─ weights/
 │   ├─ __init__.py
-│   ├─ core.py                  # class W
+│   ├─ core.py                  # W 类
 │   ├─ contiguity.py            # queen_weights, rook_weights
 │   ├─ distance.py              # knn_weights, distance_band, kernel_weights
 │   └─ block.py                 # block_weights
 ├─ esda/
 │   ├─ __init__.py
-│   ├─ _base.py                 # SpatialStatistic result class, permutation helper
+│   ├─ _base.py                 # SpatialStatistic 结果类、置换辅助函数
 │   ├─ moran.py                 # moran, moran_local
 │   ├─ geary.py
 │   ├─ getis_ord.py             # getis_ord_g, getis_ord_local
@@ -34,19 +34,19 @@ src/statspai/spatial/
 │   └─ plots.py                 # moran_plot, lisa_cluster_map
 ├─ models/
 │   ├─ __init__.py
-│   ├─ _logdet.py               # exact + Barry-Pace approx
-│   ├─ _base.py                 # shared design-matrix + result plumbing
-│   ├─ ml.py                    # sar, sem, sdm, slx, sac (ML)
+│   ├─ _logdet.py               # 精确解 + Barry-Pace 近似
+│   ├─ _base.py                 # 共享的设计矩阵与结果装配
+│   ├─ ml.py                    # sar, sem, sdm, slx, sac（ML）
 │   ├─ gmm.py                   # sar_gmm, sem_gmm, sarar_gmm
 │   ├─ diagnostics.py           # lm_tests, moran_residuals
-│   └─ impacts.py               # LeSage-Pace direct/indirect/total
+│   └─ impacts.py               # LeSage-Pace 直接 / 间接 / 总效应
 
 tests/spatial/
 ├─ __init__.py
 ├─ fixtures/
-│   ├─ columbus.csv             # dataset copy (public)
-│   ├─ columbus_shp/            # geometries
-│   └─ reference_outputs.json   # saved PySAL / spatialreg numbers
+│   ├─ columbus.csv             # 数据集副本（公开）
+│   ├─ columbus_shp/            # 几何图形
+│   └─ reference_outputs.json   # 已保存的 PySAL / spatialreg 数值
 ├─ test_weights_core.py
 ├─ test_weights_contiguity.py
 ├─ test_weights_distance.py
@@ -62,24 +62,21 @@ tests/spatial/
 └─ test_backward_compat.py
 ```
 
-**Convention:** every public function returns an object with `.summary()`. ESDA returns `SpatialStatistic`; models extend the existing `EconometricResults` from `statspai.core.results`.
+**约定：** 每个公开函数都返回带 `.summary()` 的对象。ESDA 返回 `SpatialStatistic`；模型则扩展 `statspai.core.results` 中已有的 `EconometricResults`。
 
-**Testing convention:** each public function gets at minimum (a) a happy path test against a hand-computed or PySAL reference value, (b) an edge case (empty, islands, single-obs), (c) an error case (bad input shape / type). Tolerance vs PySAL references: `rtol=1e-4`.
+**测试约定：** 每个公开函数至少要有：(a) 针对手算值或 PySAL 参考值的 正常路径测试；(b) 一个边界用例（空、孤岛、单观测）；(c) 一个错误用例 （输入形状 / 类型不合法）。与 PySAL 参考值对比的容差：`rtol=1e-4`。
 
----
+------------------------------------------------------------------------
 
-## Phase A — Weights foundation
+## 阶段 A —— 权重基础
 
-### Task 1: W core class
+### 任务 1：W 核心类
 
-**Files:**
-- Create: `src/statspai/spatial/weights/__init__.py`
-- Create: `src/statspai/spatial/weights/core.py`
-- Test: `tests/spatial/test_weights_core.py`
+**文件：** - 新建：`src/statspai/spatial/weights/__init__.py` - 新建：`src/statspai/spatial/weights/core.py` - 测试：`tests/spatial/test_weights_core.py`
 
-- [ ] **Step 1: Write failing test for W construction**
+- [ ] **步骤 1：为 W 的构造编写失败测试**
 
-```python
+``` python
 # tests/spatial/test_weights_core.py
 import numpy as np
 import pytest
@@ -113,24 +110,24 @@ def test_w_bad_input_raises():
         W("not a dict")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试，确认它失败**
 
-```
+```         
 python3 -m pytest tests/spatial/test_weights_core.py -v
-# Expected: ImportError — core.py doesn't exist yet
+# 预期：ImportError —— core.py 尚不存在
 ```
 
-- [ ] **Step 3: Implement `W` class**
+- [ ] **步骤 3：实现 `W` 类**
 
-```python
+``` python
 # src/statspai/spatial/weights/__init__.py
 from .core import W
 __all__ = ["W"]
 ```
 
-```python
+``` python
 # src/statspai/spatial/weights/core.py
-"""Sparse-backed spatial weights object."""
+"""基于稀疏矩阵的空间权重对象。"""
 from __future__ import annotations
 
 from typing import Dict, List, Mapping, Optional, Sequence, Union
@@ -140,16 +137,16 @@ from scipy import sparse
 
 
 class W:
-    """Spatial weights matrix with CSR-sparse backing.
+    """以 CSR 稀疏矩阵为后端的空间权重矩阵。
 
-    Parameters
+    参数
     ----------
     neighbors : dict[int, list[int]]
-        Mapping observation id -> list of neighbour ids.
+        观测 id -> 邻居 id 列表的映射。
     weights : dict[int, list[float]], optional
-        Matching weight values. If ``None``, binary (1.0) weights are used.
+        对应的权重值。若为 ``None``，则使用二值（1.0）权重。
     id_order : sequence, optional
-        Explicit ordering of observation ids. Defaults to ``sorted(neighbors)``.
+        观测 id 的显式排序。默认为 ``sorted(neighbors)``。
     """
 
     _VALID_TRANSFORMS = {"O", "B", "R", "V", "D"}
@@ -169,10 +166,10 @@ class W:
             self._weights = {i: [1.0] * len(v) for i, v in self._neighbors.items()}
         else:
             self._weights = {i: list(weights[i]) for i in self._id_order}
-        self._transform = "O"           # original
+        self._transform = "O"           # 原始值
         self._sparse: Optional[sparse.csr_matrix] = None
 
-    # -- basic properties --------------------------------------------------
+    # -- 基本属性 ----------------------------------------------------------
     @property
     def n(self) -> int:
         return len(self._id_order)
@@ -191,7 +188,7 @@ class W:
             self._sparse = self._build_sparse()
         return self._sparse
 
-    # -- transform ---------------------------------------------------------
+    # -- 变换 ---------------------------------------------------------------
     @property
     def transform(self) -> str:
         return self._transform
@@ -203,7 +200,7 @@ class W:
             raise ValueError(f"transform must be one of {self._VALID_TRANSFORMS}")
         if value == self._transform:
             return
-        # always reset from original binary pattern
+        # 始终从原始二值模式重置
         base_weights = {i: [1.0] * len(v) for i, v in self._neighbors.items()}
         if value == "R":
             for i, ws in base_weights.items():
@@ -211,22 +208,22 @@ class W:
                 if s > 0:
                     base_weights[i] = [w / s for w in ws]
         elif value == "V":
-            # variance stabilise: row-standardise then scale by sqrt(card)
+            # 方差稳定化：先行标准化，再按 sqrt(邻居数) 缩放
             for i, ws in base_weights.items():
                 s = sum(ws)
                 if s > 0:
                     base_weights[i] = [w / s * np.sqrt(len(ws)) for w in ws]
         elif value == "D":
-            # double-standardisation: divide by sum of all weights
+            # 双重标准化：除以所有权重之和
             total = sum(sum(ws) for ws in base_weights.values())
             if total > 0:
                 base_weights = {i: [w / total for w in ws] for i, ws in base_weights.items()}
-        # "B" and "O" keep binary values
+        # "B" 与 "O" 保持二值
         self._weights = base_weights
         self._transform = value
-        self._sparse = None             # lazy rebuild
+        self._sparse = None             # 惰性重建
 
-    # -- dense / sparse conversions ---------------------------------------
+    # -- 稠密 / 稀疏转换 ----------------------------------------------------
     def _build_sparse(self) -> sparse.csr_matrix:
         rows, cols, data = [], [], []
         for i, nbrs in self._neighbors.items():
@@ -244,9 +241,9 @@ class W:
     def full(self) -> np.ndarray:
         return self.sparse.toarray()
 
-    # -- interop -----------------------------------------------------------
+    # -- 互操作 -------------------------------------------------------------
     def to_libpysal(self):
-        """Return a libpysal.weights.W equivalent (requires libpysal)."""
+        """返回等价的 libpysal.weights.W（需要 libpysal）。"""
         try:
             from libpysal.weights import W as _LPW
         except ImportError as e:
@@ -261,32 +258,29 @@ class W:
         return cls(dict(w.neighbors), dict(w.weights), id_order=list(w.id_order))
 ```
 
-- [ ] **Step 4: Run test to verify pass**
+- [ ] **步骤 4：运行测试，确认通过**
 
-```
+```         
 python3 -m pytest tests/spatial/test_weights_core.py -v
-# Expected: 4 passed
+# 预期：4 项通过
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交**
 
-```
+```         
 git add src/statspai/spatial/weights/ tests/spatial/test_weights_core.py tests/spatial/__init__.py
 git commit -m "feat(spatial): add sparse-backed W weights class"
 ```
 
----
+------------------------------------------------------------------------
 
-### Task 2: KNN and distance-band weights
+### 任务 2：KNN 与距离带权重
 
-**Files:**
-- Create: `src/statspai/spatial/weights/distance.py`
-- Modify: `src/statspai/spatial/weights/__init__.py`
-- Test: `tests/spatial/test_weights_distance.py`
+**文件：** - 新建：`src/statspai/spatial/weights/distance.py` - 修改：`src/statspai/spatial/weights/__init__.py` - 测试：`tests/spatial/test_weights_distance.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **步骤 1：编写失败测试**
 
-```python
+``` python
 # tests/spatial/test_weights_distance.py
 import numpy as np
 import pytest
@@ -300,7 +294,7 @@ def test_knn_basic():
     w = knn_weights(coords, k=1)
     assert w.neighbors[0] == [1]
     assert w.neighbors[1] in ([0], [2])
-    assert w.neighbors[3] == [2]        # closest of the three
+    assert w.neighbors[3] == [2]        # 三者中距离最近的
 
 
 def test_distance_band_binary():
@@ -314,7 +308,7 @@ def test_kernel_gaussian_weights_decay():
     coords = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
     w = kernel_weights(coords, bandwidth=1.0, kernel="gaussian", fixed=True)
     w0 = dict(zip(w.neighbors[0], w._weights[0]))
-    assert w0[1] > w0[2]                # closer point gets larger weight
+    assert w0[1] > w0[2]                # 更近的点获得更大的权重
 
 
 def test_knn_rejects_bad_k():
@@ -323,18 +317,18 @@ def test_knn_rejects_bad_k():
         knn_weights(coords, k=5)
 ```
 
-- [ ] **Step 2: Run and confirm fail**
+- [ ] **步骤 2：运行并确认失败**
 
-```
+```         
 python3 -m pytest tests/spatial/test_weights_distance.py -v
-# Expected: ImportError
+# 预期：ImportError
 ```
 
-- [ ] **Step 3: Implement**
+- [ ] **步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/weights/distance.py
-"""Distance-based spatial weights: KNN, distance band, kernel."""
+"""基于距离的空间权重：KNN、距离带、核。"""
 from __future__ import annotations
 
 from typing import Literal
@@ -351,7 +345,7 @@ def knn_weights(coords: np.ndarray, k: int = 5) -> W:
     if k <= 0 or k >= n:
         raise ValueError(f"k must be in (0, n); got k={k}, n={n}")
     tree = cKDTree(coords)
-    _, idx = tree.query(coords, k=k + 1)     # +1 to drop self
+    _, idx = tree.query(coords, k=k + 1)     # +1 以便去掉自身
     neighbors = {i: [int(j) for j in idx[i, 1:]] for i in range(n)}
     return W(neighbors)
 
@@ -390,7 +384,7 @@ def kernel_weights(
             js = [int(j) for j in js if j != i]
             d = np.linalg.norm(coords[js] - coords[i], axis=1) if js else np.array([])
             bw = bandwidth
-        else:                                   # adaptive KNN-style bandwidth
+        else:                                   # 自适应（KNN 式）带宽
             dists, idx = tree.query(coords[i], k=int(bandwidth) + 1)
             js = [int(j) for j in idx[1:]]
             d = dists[1:]
@@ -409,9 +403,9 @@ def kernel_weights(
     return W(neighbors, weights)
 ```
 
-Update exports:
+更新导出：
 
-```python
+``` python
 # src/statspai/spatial/weights/__init__.py
 from .core import W
 from .distance import knn_weights, distance_band, kernel_weights
@@ -419,31 +413,29 @@ from .distance import knn_weights, distance_band, kernel_weights
 __all__ = ["W", "knn_weights", "distance_band", "kernel_weights"]
 ```
 
-- [ ] **Step 4: Run tests pass**
+- [ ] **步骤 4：运行测试至通过**
 
-```
+```         
 python3 -m pytest tests/spatial/test_weights_distance.py -v
-# Expected: 4 passed
+# 预期：4 项通过
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交**
 
-```
+```         
 git add src/statspai/spatial/weights/distance.py src/statspai/spatial/weights/__init__.py tests/spatial/test_weights_distance.py
 git commit -m "feat(spatial): knn / distance-band / kernel weights"
 ```
 
----
+------------------------------------------------------------------------
 
-### Task 3: Contiguity (queen, rook) with soft geopandas dep
+### 任务 3：邻接权重（queen、rook），geopandas 为软依赖
 
-**Files:**
-- Create: `src/statspai/spatial/weights/contiguity.py`
-- Test: `tests/spatial/test_weights_contiguity.py`
+**文件：** - 新建：`src/statspai/spatial/weights/contiguity.py` - 测试：`tests/spatial/test_weights_contiguity.py`
 
-- [ ] **Step 1: Write failing tests (skipped without geopandas)**
+- [ ] **步骤 1：编写失败测试（无 geopandas 时跳过）**
 
-```python
+``` python
 # tests/spatial/test_weights_contiguity.py
 import pytest
 
@@ -454,7 +446,7 @@ from statspai.spatial.weights.contiguity import queen_weights, rook_weights
 
 @pytest.fixture
 def three_squares():
-    # |A|B|C|  -- A-B share edge; B-C share edge; A-C share only a corner
+    # |A|B|C|  —— A-B 共边；B-C 共边；A-C 仅共角
     polys = [
         Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
         Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
@@ -466,11 +458,11 @@ def three_squares():
 def test_queen_vs_rook_edge_vs_corner(three_squares):
     wq = queen_weights(three_squares)
     wr = rook_weights(three_squares)
-    # both share edge; both catch 0<->1 and 1<->2
+    # 两者都共边；都能捕捉 0<->1 与 1<->2
     assert set(wq.neighbors[1]) == {0, 2}
     assert set(wr.neighbors[1]) == {0, 2}
-    # queen also picks up diagonal corner neighbours when present
-    # (this example has none, so queen == rook here)
+    # queen 在存在对角共角邻居时也会将其纳入
+    # （本例没有对角邻居，所以这里 queen == rook）
     assert wq.neighbors[0] == wr.neighbors[0]
 
 
@@ -481,17 +473,17 @@ def test_contiguity_without_geopandas_raises(monkeypatch):
         mod.queen_weights(object())
 ```
 
-- [ ] **Step 2: Run and confirm fail**
+- [ ] **步骤 2：运行并确认失败**
 
-```
+```         
 python3 -m pytest tests/spatial/test_weights_contiguity.py -v
 ```
 
-- [ ] **Step 3: Implement**
+- [ ] **步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/weights/contiguity.py
-"""Contiguity weights (queen / rook). Requires geopandas + shapely."""
+"""邻接权重（queen / rook）。需要 geopandas + shapely。"""
 from __future__ import annotations
 
 from typing import Optional
@@ -531,9 +523,9 @@ def _contiguity(gdf, criterion: str) -> W:
             if inter.is_empty:
                 continue
             if criterion == "queen":
-                # any non-empty intersection (point, line, area) qualifies
+                # 任何非空交集（点、线、面）都算邻接
                 neighbors[i].append(int(j))
-            else:                                # rook — need a line, not a point
+            else:                                # rook —— 需要线，不能只是点
                 if inter.geom_type in {"LineString", "MultiLineString"} or (
                     hasattr(inter, "length") and inter.length > 0
                 ):
@@ -549,27 +541,25 @@ def rook_weights(gdf) -> W:
     return _contiguity(gdf, "rook")
 ```
 
-Update exports to include `queen_weights`, `rook_weights`.
+更新导出，加入 `queen_weights`、`rook_weights`。
 
-- [ ] **Step 4: Run tests pass**
+- [ ] **步骤 4：运行测试至通过**
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交**
 
-```
+```         
 git commit -m "feat(spatial): queen/rook contiguity weights (soft geopandas dep)"
 ```
 
----
+------------------------------------------------------------------------
 
-### Task 4: Block weights
+### 任务 4：区组权重
 
-**Files:**
-- Create: `src/statspai/spatial/weights/block.py`
-- Test: `tests/spatial/test_weights_block.py`
+**文件：** - 新建：`src/statspai/spatial/weights/block.py` - 测试：`tests/spatial/test_weights_block.py`
 
-- [ ] **Step 1: Failing test**
+- [ ] **步骤 1：失败测试**
 
-```python
+``` python
 # tests/spatial/test_weights_block.py
 import numpy as np
 from statspai.spatial.weights.block import block_weights
@@ -582,9 +572,9 @@ def test_block_weights_same_regime_are_neighbours():
     assert sorted(w.neighbors[2]) == [3, 4]
 ```
 
-- [ ] **Step 2: Run fail** / **Step 3: Implement**
+- [ ] **步骤 2：运行至失败** / **步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/weights/block.py
 from __future__ import annotations
 
@@ -607,27 +597,23 @@ def block_weights(regimes) -> W:
     return W(neighbors)
 ```
 
-- [ ] **Step 4: Pass** / **Step 5: Commit**
+- [ ] **步骤 4：通过** / **步骤 5：提交**
 
-```
+```         
 git commit -m "feat(spatial): block (regime) weights"
 ```
 
----
+------------------------------------------------------------------------
 
-## Phase B — ESDA
+## 阶段 B —— ESDA
 
-### Task 5: SpatialStatistic result class + Moran's I global
+### 任务 5：SpatialStatistic 结果类 + 全局 Moran's I
 
-**Files:**
-- Create: `src/statspai/spatial/esda/__init__.py`
-- Create: `src/statspai/spatial/esda/_base.py`
-- Create: `src/statspai/spatial/esda/moran.py`
-- Test: `tests/spatial/test_esda_moran.py`
+**文件：** - 新建：`src/statspai/spatial/esda/__init__.py` - 新建：`src/statspai/spatial/esda/_base.py` - 新建：`src/statspai/spatial/esda/moran.py` - 测试：`tests/spatial/test_esda_moran.py`
 
-- [ ] **Step 1: Failing tests** (use Columbus reference values)
+- [ ] **步骤 1：失败测试**（使用 Columbus 参考值）
 
-```python
+``` python
 # tests/spatial/test_esda_moran.py
 import numpy as np
 import pytest
@@ -638,7 +624,7 @@ from statspai.spatial.weights import knn_weights
 def test_moran_positive_autocorrelation():
     rng = np.random.default_rng(42)
     coords = rng.uniform(size=(100, 2))
-    # synthesise y = distance from origin (spatially smooth)
+    # 构造 y = 到 (0.5, 0.5) 的距离（空间上平滑）
     y = np.linalg.norm(coords - 0.5, axis=1) + 0.05 * rng.standard_normal(100)
     w = knn_weights(coords, k=6)
     w.transform = "R"
@@ -666,11 +652,11 @@ def test_moran_summary_prints():
     assert "Moran" in out
 ```
 
-- [ ] **Step 2: Run fail / Step 3: Implement**
+- [ ] **步骤 2：运行至失败 / 步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/esda/_base.py
-"""Shared ESDA result plumbing."""
+"""ESDA 共用的结果装配。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -691,9 +677,9 @@ class SpatialStatistic:
     simulations: Optional[np.ndarray] = None
     extras: dict = field(default_factory=dict)
 
-    # Common aliases used by specific statistics
+    # 各统计量使用的通用别名
     @property
-    def I(self) -> float:           # noqa: E741 (Moran's I convention)
+    def I(self) -> float:           # noqa: E741（Moran's I 惯例）
         return self.value
 
     @property
@@ -723,15 +709,15 @@ class SpatialStatistic:
 
 
 def permutation_pvalue(observed: float, sims: np.ndarray) -> float:
-    """Two-sided empirical p-value from permutation replicates."""
+    """由置换重复样本得到的双侧经验 p 值。"""
     sims = np.asarray(sims)
     larger = np.sum(np.abs(sims - sims.mean()) >= abs(observed - sims.mean()))
     return (larger + 1) / (len(sims) + 1)
 ```
 
-```python
+``` python
 # src/statspai/spatial/esda/moran.py
-"""Moran's I (global and local)."""
+"""Moran's I（全局与局部）。"""
 from __future__ import annotations
 
 from typing import Optional
@@ -755,7 +741,7 @@ def moran(
     two_tailed: bool = True,
     seed: Optional[int] = None,
 ) -> SpatialStatistic:
-    """Global Moran's I with analytical + permutation inference."""
+    """全局 Moran's I，含解析法与置换法推断。"""
     z = _standardise(y)
     n = z.size
     S = w.sparse
@@ -767,7 +753,7 @@ def moran(
     den = float(z @ z)
     I = (n / S0) * (num / den)
 
-    # randomisation-assumption moments (Cliff-Ord)
+    # 随机化假设下的矩（Cliff-Ord）
     EI = -1.0 / (n - 1)
     S1 = 0.5 * ((S + S.T).multiply(S + S.T)).sum()
     S2 = float(np.sum((np.asarray(S.sum(axis=1)).ravel() +
@@ -805,7 +791,7 @@ def moran(
 
 
 def moran_local(y, w: W, permutations: int = 999, seed: Optional[int] = None):
-    """Local Moran (LISA). Returns array of SpatialStatistic-like values."""
+    """局部 Moran（LISA）。返回类 SpatialStatistic 的值数组。"""
     z = _standardise(y)
     n = z.size
     m2 = np.sum(z ** 2) / n
@@ -829,30 +815,30 @@ def moran_local(y, w: W, permutations: int = 999, seed: Optional[int] = None):
     }
 ```
 
-```python
+``` python
 # src/statspai/spatial/esda/__init__.py
 from .moran import moran, moran_local
 __all__ = ["moran", "moran_local"]
 ```
 
-- [ ] **Step 4: Run tests pass**
-- [ ] **Step 5: Commit**
+- [ ] **步骤 4：运行测试至通过**
+- [ ] **步骤 5：提交**
 
-```
+```         
 git commit -m "feat(spatial.esda): Moran's I (global + local) with permutation inference"
 ```
 
----
+------------------------------------------------------------------------
 
-### Task 6: Geary's C
+### 任务 6：Geary's C
 
-**Files:** `src/statspai/spatial/esda/geary.py`, `tests/spatial/test_esda_geary.py`
+**文件：** `src/statspai/spatial/esda/geary.py`、 `tests/spatial/test_esda_geary.py`
 
-- [ ] **Step 1: Failing test** — analogous to Moran; with smooth data C < 1, z < 0.
-- [ ] **Step 2: Run fail**
-- [ ] **Step 3: Implement**
+- [ ] **步骤 1：失败测试** —— 与 Moran 类似；平滑数据下 C \< 1、z \< 0。
+- [ ] **步骤 2：运行至失败**
+- [ ] **步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/esda/geary.py
 from __future__ import annotations
 from typing import Optional
@@ -870,7 +856,7 @@ def geary(y, w: W, permutations: int = 999, seed: Optional[int] = None) -> Spati
     S0 = float(S.sum())
     if S0 == 0:
         raise ValueError("Weights matrix has zero total.")
-    # numerator: sum_ij w_ij (y_i - y_j)^2
+    # 分子：sum_ij w_ij (y_i - y_j)^2
     rows, cols = S.nonzero()
     data = S.data
     diffs = (y[rows] - y[cols]) ** 2
@@ -905,19 +891,19 @@ def geary(y, w: W, permutations: int = 999, seed: Optional[int] = None) -> Spati
     )
 ```
 
-- [ ] **Step 4: Pass** / **Step 5: Commit**
+- [ ] **步骤 4：通过** / **步骤 5：提交**
 
----
+------------------------------------------------------------------------
 
-### Task 7: Getis-Ord G (global + local)
+### 任务 7：Getis-Ord G（全局 + 局部）
 
-**Files:** `src/statspai/spatial/esda/getis_ord.py`, `tests/spatial/test_esda_getis_ord.py`
+**文件：** `src/statspai/spatial/esda/getis_ord.py`、 `tests/spatial/test_esda_getis_ord.py`
 
-- [ ] **Step 1: Failing test** — hot-spot synthetic; assert G_local significant at hot centre.
-- [ ] **Step 2: Fail**
-- [ ] **Step 3: Implement**
+- [ ] **步骤 1：失败测试** —— 合成热点数据；断言热点中心处 G_local 显著。
+- [ ] **步骤 2：失败**
+- [ ] **步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/esda/getis_ord.py
 from __future__ import annotations
 from typing import Optional
@@ -964,7 +950,7 @@ def getis_ord_local(y, w: W, star: bool = True, permutations: int = 999, seed: O
     n = y.size
     S = w.sparse.toarray().copy()
     if star:
-        np.fill_diagonal(S, 1.0)              # include self
+        np.fill_diagonal(S, 1.0)              # 纳入自身
     Wi = S.sum(axis=1)
     sum_y = y.sum()
     sum_y2 = (y ** 2).sum()
@@ -974,20 +960,20 @@ def getis_ord_local(y, w: W, star: bool = True, permutations: int = 999, seed: O
     Gi_den = np.sqrt(var_y * ((n * (Wi - Wi ** 2 / n)) / (n - 1)))
     Gi_den = np.where(Gi_den == 0, np.nan, Gi_den)
     Gi = Gi_num / Gi_den
-    return {"Gs": Gi, "z": Gi}                 # Gi is already standardised
+    return {"Gs": Gi, "z": Gi}                 # Gi 已经标准化
 ```
 
-- [ ] **Step 4/5: Pass, commit**
+- [ ] **步骤 4/5：通过并提交**
 
----
+------------------------------------------------------------------------
 
-### Task 8: Join counts
+### 任务 8：连接计数
 
-**Files:** `src/statspai/spatial/esda/join_counts.py`, `tests/spatial/test_esda_join_counts.py`
+**文件：** `src/statspai/spatial/esda/join_counts.py`、 `tests/spatial/test_esda_join_counts.py`
 
-- [ ] TDD loop analogous to above. Implementation:
+- [ ] 与上述类似的 TDD 循环。实现如下：
 
-```python
+``` python
 # src/statspai/spatial/esda/join_counts.py
 from __future__ import annotations
 from typing import Optional
@@ -1021,17 +1007,17 @@ def join_counts(y, w: W, permutations: int = 999, seed: Optional[int] = None):
     }
 ```
 
-- [ ] Commit
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-### Task 9: Plots (moran_plot, lisa_cluster_map)
+### 任务 9：图形（moran_plot、lisa_cluster_map）
 
-**Files:** `src/statspai/spatial/esda/plots.py`, `tests/spatial/test_esda_plots.py`
+**文件：** `src/statspai/spatial/esda/plots.py`、 `tests/spatial/test_esda_plots.py`
 
-- [ ] **Step 1: Failing test** — smoke test: returns matplotlib Axes and does not raise.
+- [ ] **步骤 1：失败测试** —— 冒烟测试：返回 matplotlib Axes 且不抛异常。
 
-```python
+``` python
 import matplotlib
 matplotlib.use("Agg")
 import numpy as np
@@ -1048,20 +1034,20 @@ def test_moran_plot_smoke():
     assert ax is not None
 ```
 
-- [ ] Implement: simple scatter of z vs Wz with fitted regression line; slope = Moran's I.
-- [ ] Commit
+- [ ] 实现：z 对 Wz 的散点图，附拟合回归线；斜率即 Moran's I。
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-## Phase C — Log-det infrastructure
+## 阶段 C —— log-det 基础设施
 
-### Task 10: _logdet.py (exact + Barry-Pace)
+### 任务 10：\_logdet.py（精确解 + Barry-Pace）
 
-**Files:** `src/statspai/spatial/models/_logdet.py`, `tests/spatial/test_models_logdet.py`
+**文件：** `src/statspai/spatial/models/_logdet.py`、 `tests/spatial/test_models_logdet.py`
 
-- [ ] **Step 1: Failing test**
+- [ ] **步骤 1：失败测试**
 
-```python
+``` python
 # tests/spatial/test_models_logdet.py
 import numpy as np
 from scipy import sparse
@@ -1073,7 +1059,7 @@ def test_approx_close_to_exact_small_n():
     n = 50
     A = sparse.random(n, n, density=0.05, data_rvs=rng.standard_normal, random_state=0)
     A = (A + A.T) / 2
-    # row-normalise
+    # 行标准化
     rs = np.asarray(abs(A).sum(axis=1)).ravel()
     rs[rs == 0] = 1
     D = sparse.diags(1 / rs)
@@ -1084,14 +1070,15 @@ def test_approx_close_to_exact_small_n():
     assert abs(exact - approx) / abs(exact) < 0.1
 ```
 
-- [ ] **Step 2: Fail / Step 3: Implement**
+- [ ] **步骤 2：失败 / 步骤 3：实现**
 
-```python
+``` python
 # src/statspai/spatial/models/_logdet.py
-"""Log-determinant computations for (I - rho W).
+"""(I - rho W) 的对数行列式计算。
 
-Exact path: eigenvalues of W, then log det(I - rho W) = sum log(1 - rho * lam_i).
-Approx path (Barry-Pace Monte-Carlo + Chebyshev): used when n is large.
+精确路径：求 W 的特征值，然后
+log det(I - rho W) = sum log(1 - rho * lam_i)。
+近似路径（Barry-Pace 蒙特卡洛 + Chebyshev）：在 n 较大时使用。
 """
 from __future__ import annotations
 
@@ -1115,10 +1102,10 @@ def log_det_exact(W, rho: float) -> float:
 
 def log_det_approx(W, rho: float, n_draws: int = 50, order: int = 50,
                    seed: int | None = None) -> float:
-    """Barry-Pace style approximation via Hutchinson trace + Taylor expansion.
+    """通过 Hutchinson 迹估计 + 泰勒展开的 Barry-Pace 式近似。
 
     log det(I - rho W)  =  - sum_{k>=1} (rho^k / k) * tr(W^k)
-    tr(W^k) ≈ (1/M) sum_m u_m^T W^k u_m  with u_m  Rademacher.
+    tr(W^k) ≈ (1/M) sum_m u_m^T W^k u_m，其中 u_m 为 Rademacher 随机向量。
     """
     W = _to_csr(W)
     n = W.shape[0]
@@ -1135,19 +1122,19 @@ def log_det_approx(W, rho: float, n_draws: int = 50, order: int = 50,
     return total / n_draws
 ```
 
-- [ ] **Step 4: Pass / Step 5: Commit**
+- [ ] **步骤 4：通过 / 步骤 5：提交**
 
----
+------------------------------------------------------------------------
 
-## Phase D — Spatial regression models (ML)
+## 阶段 D —— 空间回归模型（ML）
 
-### Task 11: Models base (design matrix + result helpers)
+### 任务 11：模型基础（设计矩阵 + 结果辅助函数）
 
-**Files:** `src/statspai/spatial/models/_base.py`
+**文件：** `src/statspai/spatial/models/_base.py`
 
-- [ ] **Step 1: Failing test**
+- [ ] **步骤 1：失败测试**
 
-```python
+``` python
 # tests/spatial/test_models_base.py
 import numpy as np, pandas as pd
 from statspai.spatial.models._base import build_design_matrix
@@ -1157,13 +1144,13 @@ def test_build_design_matrix_shape():
     df = pd.DataFrame({"y": [1.0, 2.0, 3.0], "x1": [4.0, 5.0, 6.0]})
     y, X, names = build_design_matrix("y ~ x1", df)
     assert y.shape == (3,)
-    assert X.shape == (3, 2)               # intercept + x1
+    assert X.shape == (3, 2)               # 截距 + x1
     assert names == ["Intercept", "x1"]
 ```
 
-- [ ] **Step 2/3: Implement**
+- [ ] **步骤 2/3：实现**
 
-```python
+``` python
 # src/statspai/spatial/models/_base.py
 from __future__ import annotations
 from typing import Tuple, List
@@ -1180,18 +1167,18 @@ def build_design_matrix(formula: str, data: pd.DataFrame) -> Tuple[np.ndarray, n
     return y_arr, X_arr, names
 ```
 
-- [ ] **Step 4/5: Pass, commit**
+- [ ] **步骤 4/5：通过并提交**
 
----
+------------------------------------------------------------------------
 
-### Task 12: Refactor SAR to sparse
+### 任务 12：将 SAR 重构为稀疏实现
 
-**Files:** Modify `src/statspai/spatial/models.py` (existing), create `src/statspai/spatial/models/ml.py`, add `tests/spatial/test_models_ml.py`, `tests/spatial/test_backward_compat.py`
+**文件：** 修改 `src/statspai/spatial/models.py`（已存在），新建 `src/statspai/spatial/models/ml.py`，新增 `tests/spatial/test_models_ml.py`、 `tests/spatial/test_backward_compat.py`
 
-- [ ] **Step 1: Snapshot current SAR/SEM/SDM outputs on a small synthetic dataset and save to `tests/spatial/fixtures/baseline_outputs.json`**
+- [ ] **步骤 1：在一个小型合成数据集上快照当前的 SAR / SEM / SDM 输出， 并保存到 `tests/spatial/fixtures/baseline_outputs.json`**
 
-```python
-# scripts/snapshot_baseline.py  -- one-off, run once
+``` python
+# scripts/snapshot_baseline.py  —— 一次性脚本，仅运行一次
 import numpy as np, json, pandas as pd
 from statspai.spatial import sar, sem, sdm
 
@@ -1212,11 +1199,11 @@ with open("tests/spatial/fixtures/baseline_outputs.json", "w") as f:
     json.dump(baseline, f, indent=2)
 ```
 
-Run it: `python3 scripts/snapshot_baseline.py`. Commit the JSON fixture.
+运行它：`python3 scripts/snapshot_baseline.py`。提交该 JSON fixture。
 
-- [ ] **Step 2: Backward-compat test**
+- [ ] **步骤 2：向后兼容测试**
 
-```python
+``` python
 # tests/spatial/test_backward_compat.py
 import json, numpy as np, pandas as pd, pytest
 from statspai.spatial import sar, sem, sdm
@@ -1244,11 +1231,11 @@ def test_sar_backward_compat(synthetic):
     np.testing.assert_allclose(result.params, baseline["sar"], rtol=1e-6)
 ```
 
-(Analogous for SEM, SDM.)
+（SEM、SDM 同理。）
 
-- [ ] **Step 3: Write failing test for sparse-W acceptance**
+- [ ] **步骤 3：为「接受稀疏 W」编写失败测试**
 
-```python
+``` python
 # tests/spatial/test_models_ml.py
 import numpy as np, pandas as pd, pytest
 from statspai.spatial.weights import knn_weights, distance_band
@@ -1263,16 +1250,16 @@ def test_sar_accepts_W_object():
     y = 2 + 1.5 * x + rng.standard_normal(50)
     res = sar(w, pd.DataFrame({"y": y, "x": x}), "y ~ x")
     assert hasattr(res, "params")
-    assert res.rho is not None       # SAR exposes rho
+    assert res.rho is not None       # SAR 暴露 rho
 ```
 
-- [ ] **Step 4: Run — new test fails (current `sar` expects ndarray only)**
+- [ ] **步骤 4：运行 —— 新测试失败（当前的 `sar` 只接受 ndarray）**
 
-- [ ] **Step 5: Refactor**
+- [ ] **步骤 5：重构**
 
-```python
+``` python
 # src/statspai/spatial/models/ml.py
-"""Sparse-backed ML estimation for SAR / SEM / SDM / SLX / SAC."""
+"""SAR / SEM / SDM / SLX / SAC 的稀疏矩阵 ML 估计。"""
 from __future__ import annotations
 from typing import Union
 import numpy as np
@@ -1335,10 +1322,10 @@ def sar(
     beta = np.linalg.lstsq(X, ay, rcond=None)[0]
     e = ay - X @ beta
     sig2 = (e @ e) / n
-    # asymptotic SE: block from analytic information matrix (see LeSage-Pace 2009 p. 45)
+    # 渐近标准误：来自解析信息矩阵的块（见 LeSage-Pace 2009 p. 45）
     XtX = X.T @ X
     se_beta = np.sqrt(sig2 * np.diag(np.linalg.inv(XtX)))
-    # rho SE via numerical hessian
+    # rho 的标准误通过数值 Hessian 求得
     h = 1e-4
     hess = (neg_ll(rho_hat + h) - 2 * neg_ll(rho_hat) + neg_ll(rho_hat - h)) / h ** 2
     se_rho = 1 / np.sqrt(hess) if hess > 0 else np.nan
@@ -1362,18 +1349,18 @@ def sar(
     return result
 
 
-# (sem, sdm, slx, sac implementations follow the same template.)
+# （sem、sdm、slx、sac 的实现沿用同一模板。）
 ```
 
-Update existing `src/statspai/spatial/models.py` to become a thin forwarder:
+更新已有的 `src/statspai/spatial/models.py`，使其成为薄转发层：
 
-```python
-# src/statspai/spatial/models.py  (after refactor)
-"""Backward-compat shim. Public entry points live in statspai.spatial.models.ml."""
+``` python
+# src/statspai/spatial/models.py  （重构后）
+"""向后兼容壳。公开入口位于 statspai.spatial.models.ml。"""
 from .models.ml import sar, sem, sdm
-# SpatialModel class kept for legacy callers — forwards to ml.sar etc.
+# SpatialModel 类为遗留调用方保留 —— 转发到 ml.sar 等。
 
-class SpatialModel:            # noqa: D101 — legacy
+class SpatialModel:            # noqa: D101 —— 遗留代码
     def __init__(self, W, data, formula, model_type="sar", row_normalize=True, alpha=0.05):
         self.W, self.data, self.formula = W, data, formula
         self.model_type, self.row_normalize, self.alpha = model_type, row_normalize, alpha
@@ -1384,28 +1371,28 @@ class SpatialModel:            # noqa: D101 — legacy
                   row_normalize=self.row_normalize, alpha=self.alpha)
 ```
 
-- [ ] **Step 6: Run both test files pass**
+- [ ] **步骤 6：运行两个测试文件至通过**
 
-```
+```         
 python3 -m pytest tests/spatial/test_backward_compat.py tests/spatial/test_models_ml.py -v
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **步骤 7：提交**
 
-```
+```         
 git commit -m "refactor(spatial): sparse-backed SAR ML; accept W object; preserve API"
 ```
 
----
+------------------------------------------------------------------------
 
-### Task 13: Refactor SEM to sparse ML
+### 任务 13：将 SEM 重构为稀疏 ML
 
-**Files:** extend `src/statspai/spatial/models/ml.py`, extend `tests/spatial/test_models_ml.py`
+**文件：** 扩展 `src/statspai/spatial/models/ml.py`，扩展 `tests/spatial/test_models_ml.py`
 
-- [ ] **Step 1: Failing test** asserting `sem(W_obj, df, "y~x").lam` reasonable on synthetic SEM data.
-- [ ] **Step 2/3: Implement** `sem()` — concentrated LL in λ:
+- [ ] **步骤 1：失败测试** —— 断言在合成 SEM 数据上 `sem(W_obj, df, "y~x").lam` 取值合理。
+- [ ] **步骤 2/3：实现** `sem()` —— 关于 λ 的集中对数似然：
 
-```python
+``` python
 def sem(W, data, formula, row_normalize=True, alpha=0.05):
     y, X, names = build_design_matrix(formula, data)
     M = _coerce_W(W, row_normalize); n, k = X.shape
@@ -1425,65 +1412,65 @@ def sem(W, data, formula, row_normalize=True, alpha=0.05):
     A = sparse.eye(n) - lam * M
     beta = np.linalg.lstsq(A @ X, A @ y, rcond=None)[0]
     e = (A @ y) - (A @ X) @ beta; sig2 = (e @ e) / n
-    # ... SE computation analogous; build EconometricResults with model_type="SEM", extras={"lambda": lam}
+    # ... 标准误计算同理；构造 model_type="SEM"、extras={"lambda": lam} 的 EconometricResults
 ```
 
-- [ ] Commit
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-### Task 14: Refactor SDM to sparse ML
+### 任务 14：将 SDM 重构为稀疏 ML
 
-Same template, but augment X with `M @ X` (excluding intercept) before calling the SAR loop.
+同一模板，但在进入 SAR 求解流程前用 `M @ X` 扩充 X（排除截距列）。
 
-```python
+``` python
 def sdm(W, data, formula, row_normalize=True, alpha=0.05):
     y, X, names = build_design_matrix(formula, data)
     M = _coerce_W(W, row_normalize)
-    # append lagged X (skip intercept col 0)
+    # 追加滞后 X（跳过截距列 0）
     X_lag = M @ X[:, 1:]
     X_aug = np.hstack([X, X_lag])
     names_aug = names + [f"W_{nm}" for nm in names[1:]]
-    # feed into SAR mechanics
+    # 送入 SAR 求解流程
     return _sar_from_matrices(M, y, X_aug, names_aug, model_type="SDM")
 ```
 
-- [ ] Commit
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-### Task 15: SLX (simple lag-X) and SAC (SARAR)
+### 任务 15：SLX（简单滞后 X）与 SAC（SARAR）
 
-**Files:** extend `ml.py`, add tests.
+**文件：** 扩展 `ml.py`，补充测试。
 
-```python
+``` python
 def slx(W, data, formula, row_normalize=True, alpha=0.05):
-    """Y = X beta + W X theta + eps  — plain OLS after augmentation."""
+    """Y = X beta + W X theta + eps  —— 扩充后直接做普通 OLS。"""
     y, X, names = build_design_matrix(formula, data)
     M = _coerce_W(W, row_normalize)
     X_aug = np.hstack([X, M @ X[:, 1:]])
     names_aug = names + [f"W_{nm}" for nm in names[1:]]
-    # ordinary OLS
+    # 普通 OLS
     beta = np.linalg.lstsq(X_aug, y, rcond=None)[0]
-    # ... EconometricResults build
+    # ... 构造 EconometricResults
 ```
 
-SAC is SAR+SEM jointly (ρ, λ) — 2-D optimiser via `scipy.optimize.minimize` with Nelder-Mead; exact log-det for both (I-ρW) and (I-λW).
+SAC 是 SAR + SEM 的联合模型（ρ、λ）—— 通过 `scipy.optimize.minimize` 用 Nelder-Mead 做二维优化；(I-ρW) 与 (I-λW) 均使用精确 log-det。
 
-- [ ] Commit
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-## Phase E — GMM
+## 阶段 E —— GMM
 
-### Task 16: Kelejian-Prucha SEM GMM
+### 任务 16：Kelejian-Prucha SEM GMM
 
-**Files:** `src/statspai/spatial/models/gmm.py`, `tests/spatial/test_models_gmm.py`
+**文件：** `src/statspai/spatial/models/gmm.py`、 `tests/spatial/test_models_gmm.py`
 
-- [ ] **Step 1: Failing test** — on the same synthetic SEM DGP, `sem_gmm` estimates match ML within 0.1 on λ.
-- [ ] **Step 2/3: Implement** (Kelejian & Prucha 1999; 3-moment system for λ, σ²):
+- [ ] **步骤 1：失败测试** —— 在同一合成 SEM 数据生成过程上，`sem_gmm` 的估计与 ML 在 λ 上相差不超过 0.1。
+- [ ] **步骤 2/3：实现**（Kelejian & Prucha 1999；针对 λ、σ² 的三矩系统）：
 
-```python
+``` python
 # src/statspai/spatial/models/gmm.py
 from __future__ import annotations
 import numpy as np
@@ -1496,20 +1483,20 @@ from ...core.results import EconometricResults
 
 
 def sem_gmm(W, data, formula, robust: str | None = "het"):
-    """Kelejian-Prucha generalised moments estimator for SEM."""
+    """SEM 的 Kelejian-Prucha 广义矩估计量。"""
     y, X, names = build_design_matrix(formula, data)
     M = _coerce_W(W, row_normalize=True); n, k = X.shape
-    # Stage 1: OLS residuals
+    # 第 1 阶段：OLS 残差
     beta0 = np.linalg.lstsq(X, y, rcond=None)[0]
     u = y - X @ beta0
     Wu = M @ u; WWu = M @ Wu
-    # KP moment conditions g_i(lambda, sigma2)
+    # KP 矩条件 g_i(lambda, sigma2)
     def moments(theta):
         lam, s2 = theta
         e = u - lam * Wu
-        e2 = u - lam * (u + WWu)              # approx second moment
+        e2 = u - lam * (u + WWu)              # 近似的二阶矩
         m1 = (e @ e) / n - s2
-        m2 = (Wu @ Wu) - lam ** 2 * (Wu @ Wu)   # simplified
+        m2 = (Wu @ Wu) - lam ** 2 * (Wu @ Wu)   # 简化形式
         m3 = (u @ Wu) / n - lam * ((Wu @ Wu) / n)
         return np.array([m1, m2, m3])
 
@@ -1519,12 +1506,12 @@ def sem_gmm(W, data, formula, robust: str | None = "het"):
     opt = minimize(J, x0=[0.2, float(u @ u) / n], method="Nelder-Mead",
                    options={"xatol": 1e-6, "fatol": 1e-8})
     lam_hat, s2_hat = opt.x
-    # Stage 2: GLS with lambda_hat  — transform and re-estimate beta
+    # 第 2 阶段：用 lambda_hat 做 GLS —— 变换后重新估计 beta
     A = sparse.eye(n) - lam_hat * M
     ya = A @ y; Xa = A @ X
     beta = np.linalg.lstsq(Xa, ya, rcond=None)[0]
     e = ya - Xa @ beta
-    # Heteroscedastic robust SE (Arraiz et al. 2010, sphet)
+    # 异方差稳健标准误（Arraiz et al. 2010, sphet）
     if robust == "het":
         meat = Xa.T @ np.diag(e ** 2) @ Xa
         bread = np.linalg.inv(Xa.T @ Xa)
@@ -1540,28 +1527,28 @@ def sem_gmm(W, data, formula, robust: str | None = "het"):
     )
 ```
 
-(Full KP moments use 6-moment system per Kelejian-Prucha 1999 eq. (10)–(12); implement faithfully, citing the paper in docstring.)
+（完整的 KP 矩使用 Kelejian-Prucha 1999 式 (10)–(12) 的六矩系统；请 忠实实现，并在 docstring 中引用该论文。）
 
-- [ ] Commit
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-### Task 17: SAR GMM + SARAR GMM
+### 任务 17：SAR GMM + SARAR GMM
 
-Uses 2SLS-style instruments `[X, WX, W²X]` for the spatial lag, following Kelejian-Prucha 1998. SARAR chains SEM-GMM after SAR-GMM residuals.
+对空间滞后项使用 2SLS 式工具变量 `[X, WX, W²X]`，遵循 Kelejian-Prucha 1998。SARAR 在 SAR-GMM 的残差之后串联 SEM-GMM。
 
-- [ ] Tests — match spreg `GM_Lag` and `GM_Combo` on Columbus.
-- [ ] Implement, commit.
+- [ ] 测试 —— 在 Columbus 上对齐 spreg 的 `GM_Lag` 与 `GM_Combo`。
+- [ ] 实现并提交。
 
----
+------------------------------------------------------------------------
 
-## Phase F — Diagnostics & impacts
+## 阶段 F —— 诊断与效应分解
 
-### Task 18: LM tests (Anselin 1988)
+### 任务 18：LM 检验（Anselin 1988）
 
-**Files:** `src/statspai/spatial/models/diagnostics.py`, `tests/spatial/test_models_diagnostics.py`
+**文件：** `src/statspai/spatial/models/diagnostics.py`、 `tests/spatial/test_models_diagnostics.py`
 
-```python
+``` python
 # src/statspai/spatial/models/diagnostics.py
 from __future__ import annotations
 import numpy as np
@@ -1572,7 +1559,7 @@ from .ml import _coerce_W
 
 
 def lm_tests(formula, data, W):
-    """Return dict of LM-err, LM-lag, Robust LM-err, Robust LM-lag, SARMA."""
+    """返回 LM-err、LM-lag、稳健 LM-err、稳健 LM-lag、SARMA 的字典。"""
     y, X, _ = build_design_matrix(formula, data)
     M = _coerce_W(W, row_normalize=True); n = len(y)
     beta = np.linalg.lstsq(X, y, rcond=None)[0]
@@ -1598,23 +1585,24 @@ def lm_tests(formula, data, W):
     }
 ```
 
-- [ ] Test vs `spreg.diagnostics_sp.LMtests` on Columbus.
-- [ ] Commit.
+- [ ] 在 Columbus 上与 `spreg.diagnostics_sp.LMtests` 对比测试。
+- [ ] 提交。
 
----
+------------------------------------------------------------------------
 
-### Task 19: LeSage-Pace impacts
+### 任务 19：LeSage-Pace 效应分解
 
-**Files:** `src/statspai/spatial/models/impacts.py`, `tests/spatial/test_models_impacts.py`
+**文件：** `src/statspai/spatial/models/impacts.py`、 `tests/spatial/test_models_impacts.py`
 
-```python
+``` python
 # src/statspai/spatial/models/impacts.py
-"""Direct / indirect / total impacts (LeSage & Pace 2009).
+"""直接 / 间接 / 总效应（LeSage & Pace 2009）。
 
-For  Y = (I - rho W)^{-1} (X beta + eps),
+对  Y = (I - rho W)^{-1} (X beta + eps)，
   dY/dX_k = (I - rho W)^{-1} beta_k   (SAR)
-  ≈ average diagonal = direct; off-diagonal mean = indirect; total = direct + indirect.
-For SDM add  (I - rho W)^{-1} W * theta_k.
+  ≈ 对角元平均 = 直接效应；非对角元均值 = 间接效应；
+    总效应 = 直接效应 + 间接效应。
+SDM 还需加上  (I - rho W)^{-1} W * theta_k。
 """
 from __future__ import annotations
 import numpy as np
@@ -1632,20 +1620,20 @@ def impacts(result, n_sim: int = 1000, seed: int | None = None) -> pd.DataFrame:
     I = sparse.eye(n)
     A_inv = np.linalg.inv((I - rho * W).toarray())
     beta_names = [p for p in result.param_names if p not in {"rho", "lambda", "Intercept"}]
-    # locate betas
+    # 定位 beta
     idx_beta = [result.param_names.index(nm) for nm in beta_names]
     betas = result.params[idx_beta]
     if model == "SDM":
-        # split into non-lag and lag parts
+        # 拆分为非滞后部分与滞后部分
         raise NotImplementedError("SDM impacts — add in next iteration")
 
     direct = np.mean(np.diag(A_inv)) * betas
     total = np.mean(A_inv.sum(axis=1)) * betas
     indirect = total - direct
 
-    # Simulated SEs via draws from params' asymptotic distribution
+    # 通过从参数的渐近分布抽样得到模拟标准误
     rng = np.random.default_rng(seed)
-    cov = np.diag(result.se ** 2)              # diagonal approx; full cov TODO
+    cov = np.diag(result.se ** 2)              # 对角近似；完整协方差矩阵 TODO
     draws = rng.multivariate_normal(result.params, cov, size=n_sim)
     direct_draws, indirect_draws, total_draws = [], [], []
     rho_idx = result.param_names.index("rho")
@@ -1666,20 +1654,20 @@ def impacts(result, n_sim: int = 1000, seed: int | None = None) -> pd.DataFrame:
     }, index=beta_names)
 ```
 
-- [ ] Test: SAR with known ρ=0.5 on synthetic; direct ≈ β/(1-ρ) diagonal; indirect positive.
-- [ ] Commit
+- [ ] 测试：合成数据上已知 ρ=0.5 的 SAR；直接效应 ≈ β/(1-ρ) 的对角元； 间接效应为正。
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-## Phase G — Integration
+## 阶段 G —— 集成
 
-### Task 20: Flat re-exports and top-level API
+### 任务 20：扁平再导出与顶层 API
 
-**Files:** rewrite `src/statspai/spatial/__init__.py`, update `src/statspai/__init__.py`
+**文件：** 重写 `src/statspai/spatial/__init__.py`，更新 `src/statspai/__init__.py`
 
-```python
+``` python
 # src/statspai/spatial/__init__.py
-"""Spatial econometrics — weights, ESDA, models."""
+"""空间计量经济学 —— 权重、ESDA、模型。"""
 from .weights import (
     W, queen_weights, rook_weights, knn_weights,
     distance_band, kernel_weights, block_weights,
@@ -1695,33 +1683,33 @@ from .models.impacts import impacts
 
 __all__ = [
     "W",
-    # weights
+    # 权重
     "queen_weights", "rook_weights", "knn_weights",
     "distance_band", "kernel_weights", "block_weights",
     # esda
     "moran", "moran_local", "geary", "getis_ord_g", "getis_ord_local", "join_counts",
     "moran_plot", "lisa_cluster_map",
-    # models
+    # 模型
     "sar", "sem", "sdm", "slx", "sac",
     "sar_gmm", "sem_gmm", "sarar_gmm",
     "lm_tests", "moran_residuals", "impacts",
 ]
 ```
 
-Ensure `statspai/__init__.py` re-exports `sar`, `sem`, `sdm`, `slx`, `sac`, `sar_gmm`, `sem_gmm`, `sarar_gmm`, plus a submodule alias: `from . import spatial`.
+确保 `statspai/__init__.py` 再导出 `sar`、`sem`、`sdm`、`slx`、`sac`、 `sar_gmm`、`sem_gmm`、`sarar_gmm`，并提供子模块别名： `from . import spatial`。
 
-- [ ] **Test: `import statspai as sp; sp.moran; sp.sar; sp.impacts`**
-- [ ] Commit
+- [ ] **测试：`import statspai as sp; sp.moran; sp.sar; sp.impacts`**
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-### Task 21: Columbus reference fixture + cross-validation test
+### 任务 21：Columbus 参考 fixture + 交叉验证测试
 
-**Files:** `tests/spatial/fixtures/columbus.csv` (copy from libpysal's example set), `tests/spatial/fixtures/reference_outputs.json`, `tests/spatial/test_columbus_crossval.py`
+**文件：** `tests/spatial/fixtures/columbus.csv`（从 libpysal 示例集 复制）、`tests/spatial/fixtures/reference_outputs.json`、 `tests/spatial/test_columbus_crossval.py`
 
-- [ ] **Step 1: Acquire fixture**
+- [ ] **步骤 1：获取 fixture**
 
-```
+```         
 python3 -c "
 import libpysal, pandas as pd
 df = libpysal.io.open(libpysal.examples.get_path('columbus.dbf')).to_df()
@@ -1729,10 +1717,10 @@ df.to_csv('tests/spatial/fixtures/columbus.csv', index=False)
 "
 ```
 
-- [ ] **Step 2: Save reference numbers** (run libpysal once, save JSON; fixture file checked in so libpysal is not required at test time).
+- [ ] **步骤 2：保存参考数值**（运行一次 libpysal，保存为 JSON； fixture 文件入库，因此测试时不再需要 libpysal。）
 
-```python
-# scripts/build_columbus_reference.py  -- one-off
+``` python
+# scripts/build_columbus_reference.py  —— 一次性脚本
 import json
 from libpysal import weights, examples
 from libpysal.io import open as lpopen
@@ -1752,11 +1740,11 @@ json.dump({
 }, open("tests/spatial/fixtures/reference_outputs.json", "w"), indent=2)
 ```
 
-Run and commit the JSON.
+运行并提交该 JSON。
 
-- [ ] **Step 3: Cross-val test**
+- [ ] **步骤 3：交叉验证测试**
 
-```python
+``` python
 # tests/spatial/test_columbus_crossval.py
 import json, numpy as np, pandas as pd, pytest
 from statspai.spatial import sar, sem, queen_weights
@@ -1776,92 +1764,94 @@ def test_sar_matches_spreg(columbus):
     ref = json.load(open("tests/spatial/fixtures/reference_outputs.json"))
     res = sar(w, df, "CRIME ~ INC + HOVAL")
     np.testing.assert_allclose(res.rho, ref["ml_lag_rho"], rtol=1e-4)
-    # param order: [rho, Intercept, INC, HOVAL]; reference order: [Intercept, INC, HOVAL, rho]
+    # 参数顺序：[rho, Intercept, INC, HOVAL]；参考值顺序：[Intercept, INC, HOVAL, rho]
     np.testing.assert_allclose(
         sorted(res.params), sorted([*ref["ml_lag_betas"], ref["ml_lag_rho"]]),
         rtol=1e-4,
     )
 ```
 
-- [ ] **Step 4: Pass (this is the acceptance gate)**
-- [ ] **Step 5: Commit** — mark S1.1 complete
+- [ ] **步骤 4：通过（这是验收关卡）**
+- [ ] **步骤 5：提交** —— 标记 S1.1 完成
 
-```
+```         
 git commit -m "test(spatial): Columbus cross-validation vs spreg (<1e-4 rtol)"
 ```
 
----
+------------------------------------------------------------------------
 
-### Task 22: Tutorial notebook
+### 任务 22：教程 notebook
 
-**Files:** `docs/tutorials/spatial_tutorial.ipynb` (or `test-notebooks/` if `docs/` is git-ignored).
+**文件：** `docs/tutorials/spatial_tutorial.ipynb`（若 `docs/` 被 git 忽略，则放 `test-notebooks/`）。
 
-- [ ] Walk Columbus: load → queen → Moran → LM tests → SAR vs SEM → impacts → plot.
-- [ ] Ensure notebook runs end-to-end in CI (nbval or `jupyter nbconvert --execute`).
-- [ ] Commit
+- [ ] 走通 Columbus：载入 → queen → Moran → LM 检验 → SAR 对比 SEM → 效应分解 → 绘图。
+- [ ] 确保 notebook 在 CI 中端到端可运行（nbval 或 `jupyter nbconvert --execute`）。
+- [ ] 提交
 
----
+------------------------------------------------------------------------
 
-## Self-Review
+## 自我审查
 
-**Spec coverage (re-checked against `specs/2026-04-15-sp-01-spatial-full-stack-design.qmd` §4):**
+**规范覆盖情况（已对照 `specs/2026-04-15-sp-01-spatial-full-stack-design.qmd` §4 复核）：**
 
-| Spec API | Task |
-|---|---|
-| `W`, transforms | 1 |
-| `knn_weights`, `distance_band`, `kernel_weights` | 2 |
-| `queen_weights`, `rook_weights` | 3 |
-| `block_weights` | 4 |
-| `moran`, `moran_local` | 5 |
-| `geary` | 6 |
-| `getis_ord_g`, `getis_ord_local` | 7 |
-| `join_counts` | 8 |
-| `moran_plot`, `lisa_cluster_map` | 9 |
-| `_logdet` dual path (D2) | 10 |
-| Design-matrix helper | 11 |
-| `sar` (sparse, bw-compat) | 12 |
-| `sem` | 13 |
-| `sdm` | 14 |
-| `slx`, `sac` | 15 |
-| `sem_gmm` | 16 |
-| `sar_gmm`, `sarar_gmm` | 17 |
-| `lm_tests`, `moran_residuals` | 18 |
-| `impacts` | 19 |
-| Flat re-exports + top-level `sp.*` | 20 |
-| Columbus cross-val (<1e-4) | 21 |
-| Tutorial | 22 |
+| 规范 API                                         | 任务 |
+|--------------------------------------------------|------|
+| `W`、变换                                        | 1    |
+| `knn_weights`、`distance_band`、`kernel_weights` | 2    |
+| `queen_weights`、`rook_weights`                  | 3    |
+| `block_weights`                                  | 4    |
+| `moran`、`moran_local`                           | 5    |
+| `geary`                                          | 6    |
+| `getis_ord_g`、`getis_ord_local`                 | 7    |
+| `join_counts`                                    | 8    |
+| `moran_plot`、`lisa_cluster_map`                 | 9    |
+| `_logdet` 双路径（D2）                           | 10   |
+| 设计矩阵辅助函数                                 | 11   |
+| `sar`（稀疏、向后兼容）                          | 12   |
+| `sem`                                            | 13   |
+| `sdm`                                            | 14   |
+| `slx`、`sac`                                     | 15   |
+| `sem_gmm`                                        | 16   |
+| `sar_gmm`、`sarar_gmm`                           | 17   |
+| `lm_tests`、`moran_residuals`                    | 18   |
+| `impacts`                                        | 19   |
+| 扁平再导出 + 顶层 `sp.*`                         | 20   |
+| Columbus 交叉验证（\<1e-4）                      | 21   |
+| 教程                                             | 22   |
 
-All 24 surface items in the spec are covered. §5 decisions D1–D8 all land in Tasks 1, 10, 3, 12, 19, 21, 20, respectively. §7 S1.1 exit criterion (Columbus cross-val passes, existing tests green) is Task 21 + the backward-compat test in Task 12.
+规范中的 24 项对外接口全部被覆盖。§5 的决策 D1–D8 分别落在任务 1、10、 3、12、19、21、20。§7 的 S1.1 退出标准（Columbus 交叉验证通过、既有 测试全绿）由任务 21 与任务 12 中的向后兼容测试共同构成。
 
-**Placeholder scan:** one `raise NotImplementedError("SDM impacts — add in next iteration")` in Task 19 — acceptable because Task 19's test covers SAR only; SDM impacts are punted to a follow-up task. Adding explicit follow-up:
+**占位符扫描：** 任务 19 中有一处 `raise NotImplementedError("SDM impacts — add in next iteration")` ——可以接受，因为任务 19 的测试只覆盖 SAR；SDM 的效应分解被推迟到后续 任务。此处明确补充后续项：
 
-### Task 23: SDM impacts (follow-up)
+### 任务 23：SDM 效应分解（后续）
 
-Extend `impacts()` to handle `model_type == "SDM"` by combining β and θ (W-X lag coefficients) in the multiplier:
-`effect_k = (I - ρW)^{-1} (β_k I + θ_k W)`.
-Add test using Columbus SDM fit vs `spreg.ML_Lag` with X + WX.
+扩展 `impacts()` 以处理 `model_type == "SDM"`，在乘数中合并 β 与 θ （W-X 滞后系数）：
 
-- [ ] Implement, commit.
+`effect_k = (I - ρW)^{-1} (β_k I + θ_k W)`。
 
-**Type consistency check:** method signatures `sar(W, data, formula, ...)` match across Tasks 12 / 15 / 20 and the pre-existing `sp.sar`. `EconometricResults.params` order is `[rho_or_lambda, *beta_names]` consistently. `SpatialStatistic` used by all ESDA tasks. No drift.
+补一个测试：用 Columbus 的 SDM 拟合对比 `spreg.ML_Lag`（X + WX）。
 
----
+- [ ] 实现并提交。
 
-## Execution notes
+**类型一致性检查：** 方法签名 `sar(W, data, formula, ...)` 在任务 12 / 15 / 20 以及既有的 `sp.sar` 之间保持一致。 `EconometricResults.params` 的顺序统一为 `[rho_or_lambda, *beta_names]`。 所有 ESDA 任务都使用 `SpatialStatistic`。无漂移。
 
-- **Push cadence:** each task ends with a commit; batch a push to `main` at end of each phase (A/B/C/D/E/F/G).
-- **Golden rule:** if a test does not exist, do not write the code; if a test does not fail first, back it out and write a failing version.
-- **Soft dependencies:** install via `pip install statspai[spatial]` — add the extra to `pyproject.toml` in Task 20:
+------------------------------------------------------------------------
 
-```toml
+## 执行说明
+
+- **推送节奏：** 每个任务以一次提交收尾；在每个阶段（A/B/C/D/E/F/G） 结束时批量推送到 `main`。
+- **黄金法则：** 没有测试就不要写代码；如果测试没有先失败，就回退它并 写出会失败的版本。
+- **软依赖：** 通过 `pip install statspai[spatial]` 安装 —— 在任务 20 中把该 extra 加入 `pyproject.toml`：
+
+``` toml
 [project.optional-dependencies]
 spatial = ["geopandas>=0.14", "libpysal>=4.10", "shapely>=2.0", "matplotlib>=3.8"]
 ```
 
-Acceptance for S1.1: Task 21 green.
+S1.1 的验收标准：任务 21 全绿。
 
----
+------------------------------------------------------------------------
 
-## Handoff
+## 交接
 
-S1.2 (GWR + MGWR) and S1.3 (spatial panel) each get their own plan when they open.
+S1.2（GWR + MGWR）与 S1.3（空间面板）在启动时各自单独出计划。
