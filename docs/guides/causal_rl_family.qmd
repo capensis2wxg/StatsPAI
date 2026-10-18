@@ -1,37 +1,30 @@
 # 因果强化学习——完整方法族
 
-> **如果今天的决策会改变明天可供学习的数据**，
-> 经典因果方法就会失效：倾向得分会变化，混杂因素会漂移，
-> 奖励会延迟。因果 RL 弥合了这一差距。StatsPAI v1.4
-> 提供了 bandit、MDP、离线安全、抗混杂深度 Q 学习，以及
-> 基准测试套件——全部使用一致的 API。
+> **如果今天的决策会改变明天可供学习的数据**，经典因果方法就会失效：倾向得分会变化，混杂因素会漂移，奖励会延迟。因果 RL 弥合了这一差距。StatsPAI v1.4 提供了 bandit、MDP、离线安全、抗混杂深度 Q 学习，以及基准测试套件——全部使用一致的 API。
 
-本指南面向应用经济学家和决策支持工程师，帮助他们在经典因果推断与 RL 风格的序贯策略学习之间做出选择。下文中的所有函数都位于顶层：
-`sp.causal_bandit`、`sp.causal_dqn`、`sp.counterfactual_policy_optimization`、
-`sp.structural_mdp`、`sp.offline_safe_policy`、`sp.causal_rl_benchmark`。
+本指南面向应用经济学家和决策支持工程师，帮助他们在经典因果推断与 RL 风格的序贯策略学习之间做出选择。下文中的所有函数都位于顶层： `sp.causal_bandit`、`sp.causal_dqn`、`sp.counterfactual_policy_optimization`、 `sp.structural_mdp`、`sp.offline_safe_policy`、`sp.causal_rl_benchmark`。
 
----
+------------------------------------------------------------------------
 
 ## 何时选择因果 RL（而非一次性因果推断）
 
-| 你的问题类似于……                                              | 合适的工具                      |
-|-----------------------------------------------------------------------|---------------------------------|
+| 你的问题类似于…… | 合适的工具 |
+|-------------------------------------------------|-----------------------|
 | “处理 X 是否影响了结果 Y？”（单个时期，无后续观测） | 经典因果方法（`sp.did`、`sp.iv` 等） |
-| “在什么情境下应分配 A 或 B？”（情境式、单步） | `sp.causal_bandit`              |
-| “离线数据下的最佳多步策略，没有混杂因素”                | 标准 RL（StatsPAI 之外）  |
-| “多步策略 + 未观测混杂因素”                          | `sp.causal_dqn`                 |
-| “多步策略 + 安全约束”                               | `sp.offline_safe_policy`        |
-| “对随机策略进行离策略评估”                        | `sp.counterfactual_policy_optimization` |
-| “具有因果解释的一般结构 MDP”                   | `sp.structural_mdp`             |
+| “在什么情境下应分配 A 或 B？”（情境式、单步） | `sp.causal_bandit` |
+| “离线数据下的最佳多步策略，没有混杂因素” | 标准 RL（StatsPAI 之外） |
+| “多步策略 + 未观测混杂因素” | `sp.causal_dqn` |
+| “多步策略 + 安全约束” | `sp.offline_safe_policy` |
+| “对随机策略进行离策略评估” | `sp.counterfactual_policy_optimization` |
+| “具有因果解释的一般结构 MDP” | `sp.structural_mdp` |
 
----
+------------------------------------------------------------------------
 
 ## 因果 bandit — `sp.causal_bandit`（Bareinboim-Pearl 2015）
 
-遵循因果 DAG 的情境 bandit：有些臂与情境变量存在因果联系，因此在情境
-`X` 下选择臂 `A`，也能揭示同一情境下臂 `A'` 的信息。标准情境 bandit 忽略了这一点，会浪费样本。
+遵循因果 DAG 的情境 bandit：有些臂与情境变量存在因果联系，因此在情境 `X` 下选择臂 `A`，也能揭示同一情境下臂 `A'` 的信息。标准情境 bandit 忽略了这一点，会浪费样本。
 
-```python
+``` python
 def reward_fn(arm, context):
     # 由用户提供：返回此臂 × 情境下带噪声的奖励
     ...
@@ -48,14 +41,13 @@ r.regret_curve          # 随样本数变化的累积遗憾
 
 参考文献：Bareinboim, Forney, Pearl (2015), *NeurIPS*。
 
----
+------------------------------------------------------------------------
 
 ## 因果 DQN — `sp.causal_dqn`（Fu-Zhou 2025）
 
-采用抗混杂更新规则的深度 Q 学习。给定离线轨迹
-`(state, action, reward, next_state)`——这些轨迹可能是在**未知**日志策略下收集的——`causal_dqn` 会学习对日志策略中未观测混杂偏差具有鲁棒性的 Q 函数，其偏差由 `gamma_bound` 限定。
+采用抗混杂更新规则的深度 Q 学习。给定离线轨迹 `(state, action, reward, next_state)`——这些轨迹可能是在**未知**日志策略下收集的——`causal_dqn` 会学习对日志策略中未观测混杂偏差具有鲁棒性的 Q 函数，其偏差由 `gamma_bound` 限定。
 
-```python
+``` python
 r = sp.causal_dqn(
     data=offline_trajectories,
     state="s_vec", action="a", reward="r", next_state="s_next_vec",
@@ -73,13 +65,13 @@ r.confounding_sensitivity    # 最坏情形下的 Q 值变化
 
 引文：Li, Zhang & Bareinboim (2025), arXiv:2510.21110。
 
----
+------------------------------------------------------------------------
 
 ## 离线安全策略 — `sp.offline_safe_policy`（Chemingui et al. 2025）
 
 与因果 DQN 的思路相同，但增加了**成本约束**：以较高概率保证学习到的策略的预期成本低于 `cost_threshold`。这对医疗、机器人和定价领域的 RL 至关重要。
 
-```python
+``` python
 r = sp.offline_safe_policy(
     data=offline_trajectories,
     state="s", action="a", reward="r", cost="c",
@@ -96,13 +88,13 @@ r.reward_estimate
 
 引文：Chemingui et al. (2025), arXiv:2510.22027。
 
----
+------------------------------------------------------------------------
 
 ## 反事实策略优化 — `sp.counterfactual_policy_optimization`
 
 使用重要性抽样和双重稳健校正，在历史离策略数据上评估一个*候选*策略：
 
-```python
+``` python
 r = sp.counterfactual_policy_optimization(
     data=historical,
     state="context",
@@ -117,13 +109,13 @@ r.se_value
 
 **使用场景**：“如果我们始终采用策略 π，会得到多少奖励？”——这就是 OPE 的评估部分。它与提供 IPS/SNIPS/DR 变体的 `sp.OPEResult` 配合使用效果很好。
 
----
+------------------------------------------------------------------------
 
 ## 结构 MDP — `sp.structural_mdp`
 
 根据轨迹拟合一般参数化马尔可夫决策过程，并显式赋予因果语义：转移、奖励和策略都以结构方程的形式呈现。当你希望在不同策略下*模拟*反事实轨迹时，这很有用。
 
-```python
+``` python
 r = sp.structural_mdp(
     data=trajectories,
     state_cols=["health", "activity"],
@@ -137,7 +129,7 @@ r.reward_model               # R̂(s, a)
 r.simulate(policy=my_policy) # 反事实轨迹
 ```
 
----
+------------------------------------------------------------------------
 
 ## 基准测试：`sp.causal_rl_benchmark`
 
@@ -160,11 +152,11 @@ bench.transitions.head()
 
 参考文献：Cunha, Liu, French & Mian (2025), arXiv:2512.18135——因果 RL 基准测试分类法的统一权威参考。
 
----
+------------------------------------------------------------------------
 
 ## 决策指南
 
-```
+```         
 单步、观测数据：
   有情境变量                  → sp.causal_bandit
   仅评估策略                  → sp.counterfactual_policy_optimization
@@ -179,18 +171,15 @@ bench.transitions.head()
   → sp.causal_rl_benchmark
 ```
 
----
+------------------------------------------------------------------------
 
 ## 因果 RL 专属的合理性检查
 
-1. **策略价值校准**：对日志策略运行 `sp.counterfactual_policy_optimization`，检查估计值是否与观测到的平均奖励相符。
-2. **混杂敏感性**（仅适用于 `causal_dqn`）：绘制
-   `gamma_bound ∈ {0, 0.1, 0.5, 1.0}` 下的 `r.q_values`。曲线平坦表示鲁棒；波动较大则说明结果取决于混杂假设。
-3. **安全约束余量**（仅适用于 `offline_safe_policy`）：如果返回策略的 `cost_estimate` 恰好等于 `cost_threshold`，请放宽阈值并检查奖励是否上升——约束可能设得过紧。
-4. **基准合理性**：在真实数据上信任自定义流水线之前，先使用
-   `sp.causal_rl_benchmark(name="confounded_bandit")` 运行测试，并验证遗憾值随 `confounding_strength` 的变化符合预期。
+1.  **策略价值校准**：对日志策略运行 `sp.counterfactual_policy_optimization`，检查估计值是否与观测到的平均奖励相符。
+2.  **混杂敏感性**（仅适用于 `causal_dqn`）：绘制 `gamma_bound ∈ {0, 0.1, 0.5, 1.0}` 下的 `r.q_values`。曲线平坦表示鲁棒；波动较大则说明结果取决于混杂假设。
+3.  **安全约束余量**（仅适用于 `offline_safe_policy`）：如果返回策略的 `cost_estimate` 恰好等于 `cost_threshold`，请放宽阈值并检查奖励是否上升——约束可能设得过紧。
+4.  **基准合理性**：在真实数据上信任自定义流水线之前，先使用 `sp.causal_rl_benchmark(name="confounded_bandit")` 运行测试，并验证遗憾值随 `confounding_strength` 的变化符合预期。
 
----
+------------------------------------------------------------------------
 
-*适用于 StatsPAI ≥ 1.5.0。完整列表可通过 `sp.list_functions()` 获取——
-所有因果 RL 函数均带有 `rl` 和 `causal` 标签。*
+*适用于 StatsPAI ≥ 1.5.0。完整列表可通过 `sp.list_functions()` 获取—— 所有因果 RL 函数均带有 `rl` 和 `causal` 标签。*
