@@ -28,59 +28,25 @@ bibliography: paper.bib
 
 # 摘要
 
-`StatsPAI` 是一个开源的 Python 包，为因果推断与应用计量经济学提供统一的
-应用程序接口（API）。只需一次导入（`import statspai as sp`），研究者即可
-使用超过 390 个函数，覆盖经典计量模型、基于机器学习的现代因果方法，以及
-可直接投稿的结果输出。该包把过去需要几十个独立 R 包、或 Stata 这类昂贵
-商业软件才能完成的功能，整合进一个连贯且文档完备的库。尤为独特的是，
-`StatsPAI` 被设计为一个 *Agent 原生* 的工具箱：每个函数都暴露结构化的结果
-对象与机器可读的 schema（`list_functions()`、`describe_function()`、
-`function_schema()`），这使它成为第一个专为与大模型（LLM）驱动的研究流程
-互操作而构建的计量经济学包，同时对人类研究者依然完全好用。
+`StatsPAI` 是一个开源的 Python 包，为因果推断与应用计量经济学提供统一的应用程序接口（API）。只需一次导入（`import statspai as sp`），研究者即可使用超过 390 个函数，覆盖经典计量模型、基于机器学习的现代因果方法，以及可直接投稿的结果输出。该包把过去需要几十个独立 R 包、或 Stata 这类昂贵商业软件才能完成的功能，整合进一个连贯且文档完备的库。尤为独特的是， `StatsPAI` 被设计为一个 *Agent 原生* 的工具箱：每个函数都暴露结构化的结果对象与机器可读的 schema（`list_functions()`、`describe_function()`、 `function_schema()`），这使它成为第一个专为与大模型（LLM）驱动的研究流程互操作而构建的计量经济学包，同时对人类研究者依然完全好用。
 
 # 需求陈述
 
-经济学、政治学、公共卫生与社会科学领域的实证研究者，面对的是一个高度碎片化
-的因果推断软件生态。在 Stata 中，许多现代方法——双重/去偏机器学习、因果森林、
-元学习器、神经因果模型——根本不可用。在 R 中，相关功能分散在 20 多个包里
-（`fixest`、`did`、`rdrobust`、`gsynth`、`DoubleML`、`MatchIt`、`grf`、
-`SuperLearner` 等），API、结果结构与文档约定互不相通。在 Python 中，现有库
-占据的是互补而不重叠的生态位：`DoWhy` [@sharma2020dowhy] 侧重因果图的设定
-与假设证伪；`EconML` [@econml] 专注用机器学习估计异质性处理效应；
-`CausalML` [@chen2020causalml] 专攻 uplift 建模。没有一个包能在单一且一致的
-接口下提供完整的实证工作流——从 OLS 回归与面板数据模型，到最前沿的因果
-机器学习，再到 Word、Excel 与 LaTeX 中可直接投稿的表格。
+经济学、政治学、公共卫生与社会科学领域的实证研究者，面对的是一个高度碎片化的因果推断软件生态。在 Stata 中，许多现代方法——双重/去偏机器学习、因果森林、 元学习器、神经因果模型——根本不可用。在 R 中，相关功能分散在 20 多个包里 （`fixest`、`did`、`rdrobust`、`gsynth`、`DoubleML`、`MatchIt`、`grf`、 `SuperLearner` 等），API、结果结构与文档约定互不相通。在 Python 中，现有库占据的是互补而不重叠的生态位：`DoWhy` [@sharma2020dowhy] 侧重因果图的设定与假设证伪；`EconML` [@econml] 专注用机器学习估计异质性处理效应； `CausalML` [@chen2020causalml] 专攻 uplift 建模。没有一个包能在单一且一致的接口下提供完整的实证工作流——从 OLS 回归与面板数据模型，到最前沿的因果机器学习，再到 Word、Excel 与 LaTeX 中可直接投稿的表格。
 
-`StatsPAI` 正是为填补这一缺口而生。它的目标用户是需要在经典方法与现代方法
-之间自如切换、用最少的代码完成稳健性检验与敏感性分析、并能把结果直接导出到
-投稿格式的应用研究者。该包同时也为一类新用户而设计：AI 编码 Agent 与由 LLM
-驱动的研究助手，它们可以通过自描述的 schema 以程序化方式发现、调用并解释
-统计函数。
+`StatsPAI` 正是为填补这一缺口而生。它的目标用户是需要在经典方法与现代方法之间自如切换、用最少的代码完成稳健性检验与敏感性分析、并能把结果直接导出到投稿格式的应用研究者。该包同时也为一类新用户而设计：AI 编码 Agent 与由 LLM 驱动的研究助手，它们可以通过自描述的 schema 以程序化方式发现、调用并解释统计函数。
 
 # 领域现状
 
-近年来，Python 的因果推断生态有了显著发展。`DoWhy` [@sharma2020dowhy]
-提供了以因果图模型为基础的四步规范流程（建模、识别、估计、证伪）。
-`EconML` [@econml] 以兼容 scikit-learn 的 API 实现了双重机器学习
-[@chernozhukov2018double]、因果森林 [@wager2018estimation] 与元学习器
-[@kunzel2019metalearners]。由 Uber 开发的 `CausalML` [@chen2020causalml]
-聚焦面向商业场景的 uplift 建模。`causalinference` 包提供倾向得分方法，
-而 `pyfixest` 则提供高维固定效应估计。
+近年来，Python 的因果推断生态有了显著发展。`DoWhy` [@sharma2020dowhy] 提供了以因果图模型为基础的四步规范流程（建模、识别、估计、证伪）。 `EconML` [@econml] 以兼容 scikit-learn 的 API 实现了双重机器学习 [@chernozhukov2018double]、因果森林 [@wager2018estimation] 与元学习器 [@kunzel2019metalearners]。由 Uber 开发的 `CausalML` [@chen2020causalml] 聚焦面向商业场景的 uplift 建模。`causalinference` 包提供倾向得分方法，而 `pyfixest` 则提供高维固定效应估计。
 
-然而，这些包都没有提供完整应用计量工作流所需的广度。一位研究者若要估计
-错层双重差分模型 [@callaway2021difference]，接着做 Bacon 分解
-[@goodman2021difference]，再用 `sensemakr` [@cinelli2020making] 做敏感性
-分析，并把多模型对比表导出到 Word，目前必须把多个库中约定各异的代码拼凑
-起来。`StatsPAI` 通过单一、统一的接口提供上述全部能力——以及更多——从而
-消除了这种摩擦。
+然而，这些包都没有提供完整应用计量工作流所需的广度。一位研究者若要估计错层双重差分模型 [@callaway2021difference]，接着做 Bacon 分解 [@goodman2021difference]，再用 `sensemakr` [@cinelli2020making] 做敏感性分析，并把多模型对比表导出到 Word，目前必须把多个库中约定各异的代码拼凑起来。`StatsPAI` 通过单一、统一的接口提供上述全部能力——以及更多——从而消除了这种摩擦。
 
 # 软件设计
 
 ## 架构
 
-`StatsPAI` 由模块化子包组成，每个子包对应一个主要的方法学领域。所有估计
-函数都返回结构化的结果对象，这些对象继承自共同的 `CausalResult` 或
-`EconometricResults` 基类。结果对象提供一致的接口：
+`StatsPAI` 由模块化子包组成，每个子包对应一个主要的方法学领域。所有估计函数都返回结构化的结果对象，这些对象继承自共同的 `CausalResult` 或 `EconometricResults` 基类。结果对象提供一致的接口：
 
 ``` python
 result.summary()      # 格式化文本摘要
@@ -90,276 +56,192 @@ result.to_docx()      # Word 文档
 result.cite()         # 该方法的 BibTeX 引用
 ```
 
-这一设计确保研究者不必为不同的估计量学习不同的输出约定，也确保下游工具
-（包括 LLM Agent）能以可预测的方式与任何结果交互。
+这一设计确保研究者不必为不同的估计量学习不同的输出约定，也确保下游工具 （包括 LLM Agent）能以可预测的方式与任何结果交互。
 
 ## 方法学覆盖
 
 本包在以下类别中实现了相应方法，并给出各自的基础文献：
 
-**经典计量经济学。** 带异方差稳健与聚类标准误的 OLS；工具变量法（2SLS、
-LIML、JIVE、LASSO 筛选工具变量）；面板数据模型（固定效应、随机效应、一阶
-差分、Arellano-Bond GMM）；Heckman 选择模型；分位数回归；Tobit 模型；广义
-线性模型（6 种分布族、8 种连接函数）；多项、有序与条件 logit；计数数据
-模型（泊松、负二项、零膨胀、 hurdle）；似不相关回归（SUR）与三阶段最小
-二乘；随机前沿分析；以及 BLP 需求估计 [@berry1995automobile]。
+**经典计量经济学。** 带异方差稳健与聚类标准误的 OLS；工具变量法（2SLS、 LIML、JIVE、LASSO 筛选工具变量）；面板数据模型（固定效应、随机效应、一阶差分、Arellano-Bond GMM）；Heckman 选择模型；分位数回归；Tobit 模型；广义线性模型（6 种分布族、8 种连接函数）；多项、有序与条件 logit；计数数据模型（泊松、负二项、零膨胀、 hurdle）；似不相关回归（SUR）与三阶段最小二乘；随机前沿分析；以及 BLP 需求估计 [@berry1995automobile]。
 
-**双重差分。** 面向两期与错层设计的自动分发 `did()`；Callaway 与 Sant'Anna
-[@callaway2021difference]；Sun 与 Abraham 的交互加权估计量
-[@sun2021estimating]；Goodman-Bacon 分解 [@goodman2021difference]；
-de Chaisemartin 与 D'Haultfoeuille [@dechaisemartin2020two]；Borusyak、
-Jaravel 与 Spiess 的插补估计量 [@borusyak2024revisiting]；堆叠 DID；
-changes-in-changes；双重稳健 DID；Wooldridge 的扩展 TWFE；连续处理 DID；
-以及通过 Rambachan 与 Roth [@rambachan2023more] 进行的敏感性分析。
+**双重差分。** 面向两期与错层设计的自动分发 `did()`；Callaway 与 Sant'Anna [@callaway2021difference]；Sun 与 Abraham 的交互加权估计量 [@sun2021estimating]；Goodman-Bacon 分解 [@goodman2021difference]； de Chaisemartin 与 D'Haultfoeuille [@dechaisemartin2020two]；Borusyak、 Jaravel 与 Spiess 的插补估计量 [@borusyak2024revisiting]；堆叠 DID； changes-in-changes；双重稳健 DID；Wooldridge 的扩展 TWFE；连续处理 DID；以及通过 Rambachan 与 Roth [@rambachan2023more] 进行的敏感性分析。
 
-**断点回归。** 遵循 Calonico、Cattaneo 与 Titiunik [@calonico2014robust]
-的精确与模糊 RD，带稳健的偏差校正推断；McCrary 密度检验
-[@mccrary2008manipulation]；拐点回归设计；多断点与地理 RD
-[@cattaneo2024multi; @keele2015geographic]。
+**断点回归。** 遵循 Calonico、Cattaneo 与 Titiunik [@calonico2014robust] 的精确与模糊 RD，带稳健的偏差校正推断；McCrary 密度检验 [@mccrary2008manipulation]；拐点回归设计；多断点与地理 RD [@cattaneo2024multi; @keele2015geographic]。
 
-**合成控制。** Abadie-Diamond-Hainmueller 合成控制 [@abadie2010synthetic]；
-合成双重差分 [@arkhangelsky2021synthetic]；增广合成控制；广义合成控制
-[@xu2017generalized]；合成控制的保形推断；以及错层采纳的扩展。
+**合成控制。** Abadie-Diamond-Hainmueller 合成控制 [@abadie2010synthetic]；合成双重差分 [@arkhangelsky2021synthetic]；增广合成控制；广义合成控制 [@xu2017generalized]；合成控制的保形推断；以及错层采纳的扩展。
 
-**匹配与重加权。** 倾向得分匹配 [@rosenbaum1983central]、马氏距离匹配、
-粗化精确匹配与熵平衡，并提供包括 love plot 与重叠图在内的完整平衡性诊断。
+**匹配与重加权。** 倾向得分匹配 [@rosenbaum1983central]、马氏距离匹配、 粗化精确匹配与熵平衡，并提供包括 love plot 与重叠图在内的完整平衡性诊断。
 
-**机器学习因果方法。** 双重/去偏机器学习 [@chernozhukov2018double]；因果
-森林 [@wager2018estimation]；Deep IV [@hartford2017deep]；遵循 Kunzel 等
-[@kunzel2019metalearners] 与 Kennedy [@kennedy2023towards] 的元学习器
-（S-Learner、T-Learner、X-Learner、R-Learner、DR-Learner）；带 Super
-Learner 的目标极大似然估计（TMLE）[@vanderlaan2011targeted]；以及增广
-逆概率加权（AIPW）。
+**机器学习因果方法。** 双重/去偏机器学习 [@chernozhukov2018double]；因果森林 [@wager2018estimation]；Deep IV [@hartford2017deep]；遵循 Kunzel 等 [@kunzel2019metalearners] 与 Kennedy [@kennedy2023towards] 的元学习器 （S-Learner、T-Learner、X-Learner、R-Learner、DR-Learner）；带 Super Learner 的目标极大似然估计（TMLE）[@vanderlaan2011targeted]；以及增广逆概率加权（AIPW）。
 
-**神经因果模型。** 用于基于表示学习的处理效应估计的 TARNet 与 CFRNet
-[@shalit2017estimating]，以及 DragonNet [@shi2019adapting]，可选 PyTorch
-后端。
+**神经因果模型。** 用于基于表示学习的处理效应估计的 TARNet 与 CFRNet [@shalit2017estimating]，以及 DragonNet [@shi2019adapting]，可选 PyTorch 后端。
 
-**因果发现。** 用于 DAG 学习的 NOTEARS 连续优化 [@zheng2018dags]，以及
-用于基于约束的因果图发现的 PC 算法 [@spirtes2000causation]。
+**因果发现。** 用于 DAG 学习的 NOTEARS 连续优化 [@zheng2018dags]，以及用于基于约束的因果图发现的 PC 算法 [@spirtes2000causation]。
 
-**策略学习。** 遵循 Athey 与 Wager [@athey2021policy] 的最优策略树，并对
-处理分配规则做策略价值评估。
+**策略学习。** 遵循 Athey 与 Wager [@athey2021policy] 的最优策略树，并对处理分配规则做策略价值评估。
 
-**贝叶斯与保形因果推断。** 具备独立预后函数与处理效应函数的贝叶斯因果森林
-[@hahn2020bayesian]；个体处理效应的保形预测区间 [@lei2021conformal]。
+**贝叶斯与保形因果推断。** 具备独立预后函数与处理效应函数的贝叶斯因果森林 [@hahn2020bayesian]；个体处理效应的保形预测区间 [@lei2021conformal]。
 
-**其他方法。** 基于广义倾向得分的剂量-反应估计 [@hirano2004propensity]；
-多值处理效应 [@cattaneo2010efficient]；用于部分识别的 Lee 界与 Manski 界
-[@lee2009training; @manski1990nonparametric]；溢出与干扰效应
-[@hudgens2008toward]；通过 G 估计实现的动态治疗方案 [@robins2004optimal]；
-聚束估计 [@kleven2013using]；因果面板数据的矩阵补全 [@athey2021matrix]；
-孟德尔随机化；以及 Bartik / shift-share 工具变量。
+**其他方法。** 基于广义倾向得分的剂量-反应估计 [@hirano2004propensity]；多值处理效应 [@cattaneo2010efficient]；用于部分识别的 Lee 界与 Manski 界 [@lee2009training; @manski1990nonparametric]；溢出与干扰效应 [@hudgens2008toward]；通过 G 估计实现的动态治疗方案 [@robins2004optimal]；聚束估计 [@kleven2013using]；因果面板数据的矩阵补全 [@athey2021matrix]；孟德尔随机化；以及 Bartik / shift-share 工具变量。
 
-**诊断与敏感性分析。** 用于系数稳定性的 Oster 界 [@oster2019unobservable]；
-用于遗漏变量偏误的 `sensemakr` [@cinelli2020making]；用于未测量混杂的
-E 值 [@vanderweele2017sensitivity]；Hausman 设定检验；Anderson-Rubin
-弱工具检验；以及异方差、设定与多重共线性诊断。
+**诊断与敏感性分析。** 用于系数稳定性的 Oster 界 [@oster2019unobservable]；用于遗漏变量偏误的 `sensemakr` [@cinelli2020making]；用于未测量混杂的 E 值 [@vanderweele2017sensitivity]；Hausman 设定检验；Anderson-Rubin 弱工具检验；以及异方差、设定与多重共线性诊断。
 
 ## 独特特性
 
 若干特性使 `StatsPAI` 区别于现有包：
 
-**智能工作流引擎。** `recommend()` 函数接受一个数据集与研究问题，返回带
-推理过程、假设检查与可执行代码的合适估计量排序列表。`compare_estimators()`
-在同一份数据上运行多种方法并报告一致性诊断。`assumption_audit()` 一次调用
-即可检验任意方法的所有相关假设。`sensitivity_dashboard()` 提供带稳定性评级
-的多维敏感性分析。
+**智能工作流引擎。** `recommend()` 函数接受一个数据集与研究问题，返回带推理过程、假设检查与可执行代码的合适估计量排序列表。`compare_estimators()` 在同一份数据上运行多种方法并报告一致性诊断。`assumption_audit()` 一次调用即可检验任意方法的所有相关假设。`sensitivity_dashboard()` 提供带稳定性评级的多维敏感性分析。
 
-**设定曲线分析。** `spec_curve()` 函数实现了多宇宙分析
-[@simonsohn2020specification]，系统性地变动模型设定（控制变量集、样本
-限制、标准误类型）并把结果可视化。`robustness_report()` 自动执行一整套
-稳健性检验。`subgroup_analysis()` 通过森林图与交互项 Wald 检验做异质性
-分析。
+**设定曲线分析。** `spec_curve()` 函数实现了多宇宙分析 [@simonsohn2020specification]，系统性地变动模型设定（控制变量集、样本限制、标准误类型）并把结果可视化。`robustness_report()` 自动执行一整套稳健性检验。`subgroup_analysis()` 通过森林图与交互项 Wald 检验做异质性分析。
 
-**可直接投稿的输出。** `modelsummary()` 与 `outreg2()` 把多模型对比表导出到
-Word（.docx）、Excel（.xlsx）、LaTeX 与 HTML。`sumstats()` 与
-`balance_table()` 以所有格式生成描述性统计表与协变量平衡表。投稿主题
-（`'academic'`、`'aea'`、`'minimal'`）确保图形达到期刊要求。
+**可直接投稿的输出。** `modelsummary()` 与 `outreg2()` 把多模型对比表导出到 Word（.docx）、Excel（.xlsx）、LaTeX 与 HTML。`sumstats()` 与 `balance_table()` 以所有格式生成描述性统计表与协变量平衡表。投稿主题 （`'academic'`、`'aea'`、`'minimal'`）确保图形达到期刊要求。
 
-**Agent 原生设计。** `list_functions()` 返回所有可用函数的机器可读目录。
-`describe_function()` 提供结构化文档。`function_schema()` 返回函数输入与
-输出的 JSON schema。这些特性使基于 LLM 的研究 Agent 能够在无人指导的情况下
-发现、选择并调用合适的统计方法。
+**Agent 原生设计。** `list_functions()` 返回所有可用函数的机器可读目录。 `describe_function()` 提供结构化文档。`function_schema()` 返回函数输入与输出的 JSON schema。这些特性使基于 LLM 的研究 Agent 能够在无人指导的情况下发现、选择并调用合适的统计方法。
 
-**自动引用。** 每个因果方法的结果对象都提供 `.cite()` 方法，返回底层方法学
-对应的正确 BibTeX 条目，确保学术归属的准确性。
+**自动引用。** 每个因果方法的结果对象都提供 `.cite()` 方法，返回底层方法学对应的正确 BibTeX 条目，确保学术归属的准确性。
 
 ## 实现
 
-`StatsPAI` 用纯 Python 实现，核心依赖为 NumPy、SciPy、Pandas、statsmodels、
-scikit-learn 与 linearmodels。可选后端包括 PyTorch（用于神经因果模型与
-Deep IV）、JAX（用于性能关键的计算）与 pyfixest（用于高维固定效应）。该包
-支持 Python 3.9 及以上版本，通过 PyPI 以 MIT 许可发布。
+`StatsPAI` 用纯 Python 实现，核心依赖为 NumPy、SciPy、Pandas、statsmodels、 scikit-learn 与 linearmodels。可选后端包括 PyTorch（用于神经因果模型与 Deep IV）、JAX（用于性能关键的计算）与 pyfixest（用于高维固定效应）。该包支持 Python 3.9 及以上版本，通过 PyPI 以 MIT 许可发布。
 
-包内还内置了数据生成过程（`dgp_did()`、`dgp_rd()`、`dgp_iv()`、`dgp_rct()`
-等），用于教学、测试与蒙特卡洛模拟，提供具有已知真实处理效应的标准数据集。
+包内还内置了数据生成过程（`dgp_did()`、`dgp_rd()`、`dgp_iv()`、`dgp_rct()` 等），用于教学、测试与蒙特卡洛模拟，提供具有已知真实处理效应的标准数据集。
 
 # 数值验证
 
-我们使用内置的、具有已知真实处理效应的数据生成过程（DGP）来验证
-`StatsPAI` 的估计量。所有实验均使用 `seed=42` 以保证可复现。
+我们使用内置的、具有已知真实处理效应的数据生成过程（DGP）来验证 `StatsPAI` 的估计量。所有实验均使用 `seed=42` 以保证可复现。
 
 ## 单次运行验证
 
-表 1 报告了六个核心估计量各自应用于其标准 DGP 时的点估计、标准误与 95%
-置信区间覆盖情况。在所有情形下，真实参数值都落在置信区间之内。
+表 1 报告了六个核心估计量各自应用于其标准 DGP 时的点估计、标准误与 95% 置信区间覆盖情况。在所有情形下，真实参数值都落在置信区间之内。
 
 **表 1：基于已知 DGP 的点估计**
 
-| 方法     | 真实 $\theta$ | 估计值 |  标准误   | 95% CI 是否覆盖 | 时间（秒） |
-|------------|:-------------:|:--------:|:------:|:-------------:|:--------:|
-| DID (2×2)  |     2.000     |  1.9710  | 0.0980 |      是      |  0.003   |
-| RD（精确） |     0.500     |  0.4274  | 0.0829 |      是      |  0.001   |
-| IV (2SLS)  |     0.500     |  0.5278  | 0.0376 |      是      |  0.018   |
-| DML        |     0.500     |  0.4439  | 0.0458 |      是      |  0.609   |
-| PSM        |     0.500     |  0.4930  | 0.0470 |      是      |  0.016   |
-| AIPW       |     0.500     |  0.4849  | 0.0459 |      是      |  0.454   |
+| 方法       | 真实 $\theta$ | 估计值 | 标准误 | 95% CI 是否覆盖 | 时间（秒） |
+|------------|:-------------:|:------:|:------:|:---------------:|:----------:|
+| DID (2×2)  |     2.000     | 1.9710 | 0.0980 |       是        |   0.003    |
+| RD（精确） |     0.500     | 0.4274 | 0.0829 |       是        |   0.001    |
+| IV (2SLS)  |     0.500     | 0.5278 | 0.0376 |       是        |   0.018    |
+| DML        |     0.500     | 0.4439 | 0.0458 |       是        |   0.609    |
+| PSM        |     0.500     | 0.4930 | 0.0470 |       是        |   0.016    |
+| AIPW       |     0.500     | 0.4849 | 0.0459 |       是        |   0.454    |
 
-*注：DID 使用* $N = 200$ 个个体 $\times$ 10 个时期；RD 使用 $N = 3{,}000$；
-IV、DML、PSM 与 AIPW 使用 $N = 2{,}000$。DML 采用 5 折交叉拟合，冗余模型
-为随机森林。
+*注：DID 使用* $N = 200$ 个个体 $\times$ 10 个时期；RD 使用 $N = 3{,}000$； IV、DML、PSM 与 AIPW 使用 $N = 2{,}000$。DML 采用 5 折交叉拟合，冗余模型为随机森林。
 
 ## 内生性下的偏差校正
 
-表 2 展示了 IV 校正内生性偏差的能力。该 DGP 通过一个同时影响处理变量与
-结果变量的不可观测因素引入混杂。OLS 的偏差为 0.371；IV 将其降至
-0.028——改善了 13.4 倍。
+表 2 展示了 IV 校正内生性偏差的能力。该 DGP 通过一个同时影响处理变量与结果变量的不可观测因素引入混杂。OLS 的偏差为 0.371；IV 将其降至 0.028——改善了 13.4 倍。
 
 **表 2：内生性下 OLS 与 IV 的对比（真实** $\theta = 0.500$，$N = 2{,}000$）
 
-| 估计量   | 估计值 |  偏差  |
-|-------------|:--------:|:------:|
-| OLS（朴素） |  0.8710  | 0.3710 |
-| IV (2SLS)   |  0.5278  | 0.0278 |
+| 估计量      | 估计值 |  偏差  |
+|-------------|:------:|:------:|
+| OLS（朴素） | 0.8710 | 0.3710 |
+| IV (2SLS)   | 0.5278 | 0.0278 |
 
 ## 观测数据上的多个估计量
 
-表 3 把四个因果估计量应用于同一份存在可观测选择（混杂强度 = 0.3）的观测
-数据集。所有方法得到的估计都接近真实值；PSM 的偏差最小（0.007），其次是
-AIPW（0.015）。
+表 3 把四个因果估计量应用于同一份存在可观测选择（混杂强度 = 0.3）的观测数据集。所有方法得到的估计都接近真实值；PSM 的偏差最小（0.007），其次是 AIPW（0.015）。
 
 **表 3：观测数据上的估计量对比（真实** $\theta = 0.500$，$N = 2{,}000$）
 
-| 估计量   | 估计值 |  偏差  |
-|-------------|:--------:|:------:|
-| OLS（朴素） |  0.4818  | 0.0182 |
-| DML         |  0.4439  | 0.0561 |
-| PSM         |  0.4930  | 0.0070 |
-| AIPW        |  0.4849  | 0.0151 |
+| 估计量      | 估计值 |  偏差  |
+|-------------|:------:|:------:|
+| OLS（朴素） | 0.4818 | 0.0182 |
+| DML         | 0.4439 | 0.0561 |
+| PSM         | 0.4930 | 0.0070 |
+| AIPW        | 0.4849 | 0.0151 |
 
 ## 元学习器对比
 
-表 4 比较了在随机实验数据（$N = 2{,}000$，真实 ATE $= 1.0$）上估计条件
-平均处理效应（CATE）的五个元学习器。
+表 4 比较了在随机实验数据（$N = 2{,}000$，真实 ATE $= 1.0$）上估计条件平均处理效应（CATE）的五个元学习器。
 
 **表 4：元学习器的 ATE 估计（RCT 数据，真实 ATE** $= 1.000$）
 
-| 学习器    |  ATE   |  标准误   | 时间（秒） |
-|------------|:------:|:------:|:--------:|
-| S-Learner  | 0.8968 | 0.0050 |  0.267   |
-| T-Learner  | 0.9264 | 0.0124 |  0.268   |
-| X-Learner  | 0.9174 | 0.0066 |  0.774   |
-| R-Learner  | 0.9290 | 0.0105 |  2.491   |
-| DR-Learner | 0.9426 | 0.0533 |  2.692   |
+| 学习器     |  ATE   | 标准误 | 时间（秒） |
+|------------|:------:|:------:|:----------:|
+| S-Learner  | 0.8968 | 0.0050 |   0.267    |
+| T-Learner  | 0.9264 | 0.0124 |   0.268    |
+| X-Learner  | 0.9174 | 0.0066 |   0.774    |
+| R-Learner  | 0.9290 | 0.0105 |   2.491    |
+| DR-Learner | 0.9426 | 0.0533 |   2.692    |
 
 ## 蒙特卡洛覆盖研究
 
-为评估有限样本性质，我们对三个估计量各做了 200 次重复的蒙特卡洛实验。
-表 5 报告了平均偏差、均方根误差（RMSE），以及名义 95% 置信区间的实际
-覆盖率。
+为评估有限样本性质，我们对三个估计量各做了 200 次重复的蒙特卡洛实验。表 5 报告了平均偏差、均方根误差（RMSE），以及名义 95% 置信区间的实际覆盖率。
 
 **表 5：蒙特卡洛模拟结果（200 次重复）**
 
-| 方法                    | 真实 $\theta$ | 平均偏差 |  RMSE  | 实际覆盖率 |
-|---------------------------|:-------------:|:---------:|:------:|:------------------:|
-| DID (2×2, $N_u = 100$)    |     2.000     |  0.0003   | 0.0637 |       100.0%       |
-| RD（精确, $N = 1{,}000$） |     0.500     |  −0.0100  | 0.1387 |       96.5%        |
-| IV (2SLS, $N = 1{,}000$)  |     0.500     |  −0.0031  | 0.0568 |       97.5%        |
+| 方法                      | 真实 $\theta$ | 平均偏差 |  RMSE  | 实际覆盖率 |
+|---------------------------|:-------------:|:--------:|:------:|:----------:|
+| DID (2×2, $N_u = 100$)    |     2.000     |  0.0003  | 0.0637 |   100.0%   |
+| RD（精确, $N = 1{,}000$） |     0.500     | −0.0100  | 0.1387 |   96.5%    |
+| IV (2SLS, $N = 1{,}000$)  |     0.500     | −0.0031  | 0.0568 |   97.5%    |
 
-三个估计量的平均偏差都可以忽略（绝对值 < 0.01），实际覆盖率达到或高于
-名义的 95% 水平，这确认了 `StatsPAI` 的实现在有限样本中能给出有效推断。
+三个估计量的平均偏差都可以忽略（绝对值 \< 0.01），实际覆盖率达到或高于名义的 95% 水平，这确认了 `StatsPAI` 的实现在有限样本中能给出有效推断。
 
 # 复现研究
 
-为证明 `StatsPAI` 产生的结果与已发表文献及成熟软件一致，我们使用标准数据集
-做了三项复现练习，并与 `EconML` 做交叉验证。
+为证明 `StatsPAI` 产生的结果与已发表文献及成熟软件一致，我们使用标准数据集做了三项复现练习，并与 `EconML` 做交叉验证。
 
 ## Card (1995)：用 IV 估计教育回报率
 
-我们复现了 Card（1995）对教育回报率的工具变量估计，以是否靠近四年制大学
-（`nearc4`）作为受教育年限的工具变量。我们使用 Wooldridge 教材中的原始
-数据集（$N = 3{,}010$），并与 Angrist 和 Pischke 的《Mostly Harmless
-Econometrics》表 4.1.1 [@angrist2009mostly] 中的发表值对比。
+我们复现了 Card（1995）对教育回报率的工具变量估计，以是否靠近四年制大学 （`nearc4`）作为受教育年限的工具变量。我们使用 Wooldridge 教材中的原始数据集（$N = 3{,}010$），并与 Angrist 和 Pischke 的《Mostly Harmless Econometrics》表 4.1.1 [@angrist2009mostly] 中的发表值对比。
 
 **表 6：教育回报率上 OLS 与 IV 的估计（**$N = 3{,}010$）
 
-|                           | StatsPAI | 发表值 | 是否一致 |
-|---------------------------|:--------:|:---------:|:-----:|
-| OLS 中 `educ` 的系数 |  0.0740  |  0.0747   |  是  |
-| OLS 标准误        |  0.0036  |  0.0034   |  是  |
-| IV 中 `educ` 的系数  |  0.1323  |  0.1315   |  是  |
-| IV 标准误         |  0.0492  |  0.0549   |  是  |
-| IV/OLS 之比              |   1.79   |   1.76    |  是  |
-| 第一阶段 $F$ 统计量 |   17.5   |   $>10$   |  是  |
+|                      | StatsPAI | 发表值 | 是否一致 |
+|----------------------|:--------:|:------:|:--------:|
+| OLS 中 `educ` 的系数 |  0.0740  | 0.0747 |    是    |
+| OLS 标准误           |  0.0036  | 0.0034 |    是    |
+| IV 中 `educ` 的系数  |  0.1323  | 0.1315 |    是    |
+| IV 标准误            |  0.0492  | 0.0549 |    是    |
+| IV/OLS 之比          |   1.79   |  1.76  |    是    |
+| 第一阶段 $F$ 统计量  |   17.5   | $>10$  |    是    |
 
-所有估计都在取整精度内与发表值吻合。IV 估计（0.132）比 OLS 估计（0.074）
-高出 1.79 倍，与发表的 1.76 之比一致，也符合「OLS 因能力偏差而被削弱」的
-理论预测。
+所有估计都在取整精度内与发表值吻合。IV 估计（0.132）比 OLS 估计（0.074） 高出 1.79 倍，与发表的 1.76 之比一致，也符合「OLS 因能力偏差而被削弱」的理论预测。
 
 ## LaLonde (1986) / Dehejia and Wahba (1999)：NSW 职业培训
 
-我们使用 National Supported Work（NSW）随机实验中 Dehejia--Wahba 的精确
-子样本（$N = 445$；处理组 185 人、对照组 260 人），数据从 Dehejia 的 NBER
-存档下载。发表的实验基准值为 1,794 美元。
+我们使用 National Supported Work（NSW）随机实验中 Dehejia--Wahba 的精确子样本（$N = 445$；处理组 185 人、对照组 260 人），数据从 Dehejia 的 NBER 存档下载。发表的实验基准值为 1,794 美元。
 
 **表 7：NSW 实验数据上的因果估计（**$N = 445$）
 
-| 估计量                     | 估计值（美元） | 标准误（美元） | 发表值 |
-|-------------------------------|:-------------:|:-------:|:---------:|
-| 原始差值（实验） |     1,794     |   671   |  \$1,794  |
-| OLS + 控制变量                |     1,676     |   677   |     —     |
-| PSM                           |     2,570     |   631   |     —     |
-| DML                           |     1,410     |   673   |     —     |
-| AIPW                          |     1,307     |   732   |     —     |
+| 估计量           | 估计值（美元） | 标准误（美元） | 发表值  |
+|------------------|:--------------:|:--------------:|:-------:|
+| 原始差值（实验） |     1,794      |      671       | \$1,794 |
+| OLS + 控制变量   |     1,676      |      677       |    —    |
+| PSM              |     2,570      |      631       |    —    |
+| DML              |     1,410      |      673       |    —    |
+| AIPW             |     1,307      |      732       |    —    |
 
-均值差与发表的 1,794 美元基准完全吻合。所有因果估计量都给出为正、且具有
-经济意义的估计，这与无混杂的随机实验数据的预期一致。
+均值差与发表的 1,794 美元基准完全吻合。所有因果估计量都给出为正、且具有经济意义的估计，这与无混杂的随机实验数据的预期一致。
 
 ## Lee (2008)：RD 下的在任者优势
 
-我们复现了 Lee（2008）对美国众议院选举中在任者优势的断点回归估计
-（$N = 6{,}558$）。
+我们复现了 Lee（2008）对美国众议院选举中在任者优势的断点回归估计 （$N = 6{,}558$）。
 
 **表 8：在任者优势的 RD 估计（**$N = 6{,}558$）
 
-|                       | 估计值 |  标准误   |      95% CI      | p 值 |
-|-----------------------|:--------:|:------:|:----------------:|:-------:|
-| StatsPAI `rdrobust()` |  0.0616  | 0.0244 | \[0.014, 0.109\] |  0.012  |
-| 发表值（Lee 2008）  |  \~0.08  |   —    |        —         |    —    |
+|                       | 估计值 | 标准误 |      95% CI      | p 值  |
+|-----------------------|:------:|:------:|:----------------:|:-----:|
+| StatsPAI `rdrobust()` | 0.0616 | 0.0244 | \[0.014, 0.109\] | 0.012 |
+| 发表值（Lee 2008）    | \~0.08 |   —    |        —         |   —   |
 
-估计值（6.2 个百分点）与发表值（约 8 个百分点）一致，且在统计上显著。
-McCrary 密度检验（$p = 0.90$）确认没有证据表明运行变量被操纵。与发表点
-估计的差异源于 `StatsPAI` 采用了 Calonico、Cattaneo 与 Titiunik
-[@calonico2014robust] 的稳健偏差校正推断，而该方法在 Lee（2008）发表时
-尚不存在。
+估计值（6.2 个百分点）与发表值（约 8 个百分点）一致，且在统计上显著。 McCrary 密度检验（$p = 0.90$）确认没有证据表明运行变量被操纵。与发表点估计的差异源于 `StatsPAI` 采用了 Calonico、Cattaneo 与 Titiunik [@calonico2014robust] 的稳健偏差校正推断，而该方法在 Lee（2008）发表时尚不存在。
 
 ## 与 EconML 的交叉验证
 
-我们在真实的 Card（1995）数据集上同时运行 `StatsPAI` 与 `EconML` 的 DML
-实现，以验证跨包的一致性。
+我们在真实的 Card（1995）数据集上同时运行 `StatsPAI` 与 `EconML` 的 DML 实现，以验证跨包的一致性。
 
 **表 9：StatsPAI 与 EconML —— Card (1995) 数据上的 DML（**$N = 3{,}010$）
 
-| 包    | DML 估计值 | 时间（秒） |
-|------------|:------------:|:--------:|
-| StatsPAI   |    0.0741    |   0.44   |
-| EconML     |    0.0749    |   0.84   |
-| 差异 |    0.0008    |    —     |
+| 包       | DML 估计值 | 时间（秒） |
+|----------|:----------:|:----------:|
+| StatsPAI |   0.0741   |    0.44    |
+| EconML   |   0.0749   |    0.84    |
+| 差异     |   0.0008   |     —      |
 
-两个包在 0.001 内一致，确认 `StatsPAI` 的 DML 实现与 `EconML` 中的参照
-实现一致 [@econml]。两个估计都接近 OLS 基准（0.074），这符合预期：因为
-处理变量（受教育年限）不是二值的，且 DML 的设定与线性模型相匹配。
+两个包在 0.001 内一致，确认 `StatsPAI` 的 DML 实现与 `EconML` 中的参照实现一致 [@econml]。两个估计都接近 OLS 基准（0.074），这符合预期：因为处理变量（受教育年限）不是二值的，且 DML 的设定与线性模型相匹配。
 
 # 功能覆盖对比
 
@@ -368,7 +250,7 @@ McCrary 密度检验（$p = 0.90$）确认没有证据表明运行变量被操�
 **表 10：Python 因果推断包的功能覆盖**
 
 | 方法类别 | StatsPAI | DoWhy | EconML | CausalML |
-|-------------------------|:----------:|:----------:|:----------:|:----------:|
+|--------------------|:-----------:|:-----------:|:-----------:|:-----------:|
 | OLS / 面板 / GLM | ✓ | — | — | — |
 | 工具变量法 | ✓ | ✓ | ✓ | — |
 | 双重差分（含错层） | ✓（10 种变体） | — | ✓ | — |
@@ -388,34 +270,20 @@ McCrary 密度检验（$p = 0.90$）确认没有证据表明运行变量被操�
 | 可直接投稿的输出（Word/Excel/LaTeX） | ✓ | — | — | — |
 | Agent 原生 API（schema/注册表） | ✓ | — | — | — |
 
-*注："—" 表示该包不提供此方法。DoWhy 可以通过其可扩展 API 把估计委托给
-EconML 或 CausalML，但本身并未原生实现上表列出的估计量。功能数量反映的是
-截至 2026 年 4 月的包版本。*
+*注："—" 表示该包不提供此方法。DoWhy 可以通过其可扩展 API 把估计委托给 EconML 或 CausalML，但本身并未原生实现上表列出的估计量。功能数量反映的是截至 2026 年 4 月的包版本。*
 
 # 研究影响陈述
 
-`StatsPAI` 消除了学习多套软件生态的需要，从而降低了做严谨因果推断的门槛。
-它让研究者能够在一个一致的、Pythonic 的接口下应用最前沿的方法——其中许多
-此前只有熟悉 R 或自行实现代码的专家才能触及。该包的 Agent 原生设计把它
-置于 AI 辅助实证研究的前沿：LLM Agent 可以借助 `StatsPAI` 自描述的函数
-注册表，自主地开展可信的因果分析。
+`StatsPAI` 消除了学习多套软件生态的需要，从而降低了做严谨因果推断的门槛。它让研究者能够在一个一致的、Pythonic 的接口下应用最前沿的方法——其中许多此前只有熟悉 R 或自行实现代码的专家才能触及。该包的 Agent 原生设计把它置于 AI 辅助实证研究的前沿：LLM Agent 可以借助 `StatsPAI` 自描述的函数注册表，自主地开展可信的因果分析。
 
-内置的稳健性工具（`spec_curve()`、`robustness_report()`、
-`assumption_audit()`）提升了透明度与可复现性，回应了社会科学界对实证发现
-可信度日益增长的关切 [@simonsohn2020specification]。`replicate()` 函数随包
-附带标准数据集（Card 1995、LaLonde 1986、Lee 2008）与逐步的复现指南，
-支持教学与方法学对标。
+内置的稳健性工具（`spec_curve()`、`robustness_report()`、 `assumption_audit()`）提升了透明度与可复现性，回应了社会科学界对实证发现可信度日益增长的关切 [@simonsohn2020specification]。`replicate()` 函数随包附带标准数据集（Card 1995、LaLonde 1986、Lee 2008）与逐步的复现指南，支持教学与方法学对标。
 
 # AI 使用披露
 
-部分代码文档与测试套件是在 Claude（Anthropic）的辅助下生成的。所有生成的
-内容都经过作者的审阅与验证。统计实现部分由作者撰写，对照已发表的方法学
-参考文献进行核对，并使用已知基准数据集做了验证。
+部分代码文档与测试套件是在 Claude（Anthropic）的辅助下生成的。所有生成的内容都经过作者的审阅与验证。统计实现部分由作者撰写，对照已发表的方法学参考文献进行核对，并使用已知基准数据集做了验证。
 
 # 致谢
 
-作者感谢 Stanford REAP Program 提供的机构支持，以及 CoPaper.AI 团队对该包
-早期版本给出的反馈。作者同时感谢 `StatsPAI` 所依赖的那些开源包的开发者，
-包括 statsmodels、scikit-learn、linearmodels 与 PyTorch。
+作者感谢 Stanford REAP Program 提供的机构支持，以及 CoPaper.AI 团队对该包早期版本给出的反馈。作者同时感谢 `StatsPAI` 所依赖的那些开源包的开发者，包括 statsmodels、scikit-learn、linearmodels 与 PyTorch。
 
 # 参考文献
