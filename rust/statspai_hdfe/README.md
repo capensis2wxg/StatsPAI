@@ -3,7 +3,7 @@
 PyO3 + Rayon HDFE group-demean kernel for [StatsPAI](https://github.com/brycewang-stanford/StatsPAI).
 
 Phase 1 scaffold. See
-[`docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.md`](../../docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.md)
+[`docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd`](../../docs/superpowers/specs/2026-04-20-v095-rust-hdfe-spike.qmd)
 on the parent repo for the full rollout plan.
 
 ## Build

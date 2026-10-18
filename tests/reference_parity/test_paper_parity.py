@@ -19,7 +19,7 @@ The combination gives us:
     (b) 6-decimal pin on a fixed seed    -> no numerical drift.
 
 References for the analytical population parameters are in
-``REFERENCES.md`` under the "High-N analytical parity" section.
+``REFERENCES.qmd`` under the "High-N analytical parity" section.
 """
 from __future__ import annotations
 

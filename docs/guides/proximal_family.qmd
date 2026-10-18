@@ -1,0 +1,245 @@
+# 近端因果推断——完整方法家族
+
+> **当混杂因素不可观测时**，近端因果推断（PCI）利用未观测混杂因素的两个*代理变量*来识别 ATE。StatsPAI
+> 提供基础估计器以及四种 2025–2026 年前沿变体，可应对桥函数错设、政策层面的干预、
+> 双向混杂和短期到长期的外推。
+
+本指南通过一个贯穿始终的示例介绍整个 PCI 方法家族，并说明各种情形下应选用哪个变体。以下所有函数都位于顶层：`sp.proximal`、`sp.fortified_pci`、
+`sp.bidirectional_pci`、`sp.pci_mtp`、`sp.double_negative_control`、
+`sp.proximal_surrogate_index`、`sp.select_pci_proxies`。
+
+---
+
+## 问题设定
+
+你有结果变量 `Y`、处理变量 `D`、可观测协变量 `X`，以及一个**未观测**混杂因素 `U`。在给定 `X` 后，由于 `U → D` 且 `U → Y`，后门调整无法识别 ATE。
+
+近端识别（Miao-Geng-Tchetgen, 2018；Tchetgen 等, 2024）在能够找到 `U` 的两个代理变量时成立：
+
+- **`Z`**（处理诱导的混杂代理变量）——依赖于 `U`，也可能依赖于 `D`；给定 `(U, D, X)` 后，`Z` 与 `Y` 独立。
+- **`W`**（结果诱导的混杂代理变量）——依赖于 `U`，也可能依赖于 `Y`；给定 `(U, X)` 后，`W` 与 `D` 独立。
+
+此外还需满足将 `(D, Z)` 与 `W` 联系起来的*完备性*条件（粗略地说，给定 `(D, X)` 后，`W` 携带足够的信息以非参数方式预测 `U`）。
+
+选择代理变量是难点——见下文的 `sp.select_pci_proxies`。
+
+---
+
+## 经典估计器：`sp.proximal`
+
+对结果桥函数进行两阶段最小二乘。当桥函数可能为线性且你有一个 `Z` 和一个 `W` 时，这是不错的默认选择。
+
+```python
+r = sp.proximal(
+    data=df, y="Y", treat="D",
+    proxy_z=["Z"], proxy_w=["W"],
+    covariates=["X1", "X2"],
+    bridge="linear",     # or "loglinear"
+    n_boot=500,
+)
+r.summary()
+```
+
+参考文献：Miao, Geng, Tchetgen Tchetgen (2018), *Biometrika* 105(4)；Cui,
+Pu, Miao, Kennedy, Tchetgen (2024), *JASA*。
+
+---
+
+## 强化 PCI——`sp.fortified_pci`（Yang & Schwartz, 2025）
+
+当任一桥函数错设时，标准 PCI 会严重失效。**强化 PCI**增加了稳定性约束：在每种代理变量选择下，它会拟合两个桥函数，并使用共享惩罚项将解推向两个矩条件均得到满足的*重叠区域*。实证结果显示，在中度桥函数错设下，这种 PCI 变体最稳健（Yang-Schwartz 2025 表 2–4）。
+
+```python
+r = sp.fortified_pci(
+    data=df, y="Y", treat="D",
+    proxy_z=["Z"], proxy_w=["W"],
+    covariates=["X1", "X2"],
+)
+```
+
+**适用情形**：使用 `sp.proximal` 得出的点估计在添加或删除单个协变量后发生明显变化，或者 `bridge="linear"` 与 `bridge="loglinear"` 得出的结果差异很大。
+
+引文：Yu, Shi & Tchetgen Tchetgen (2025), arXiv:2506.13152。
+
+---
+
+## 双向 PCI——`sp.bidirectional_pci`（Shi, Miao & Tchetgen, 2025）
+
+标准 PCI 求解**结果桥函数**（回归 `Y` 对 `D, W, X`），然后通过 `Z` 反演。双向 PCI 则在单个双向回归中同时拟合结果桥函数和处理桥函数，从而：
+
+1. 在任一桥函数识别较弱时降低有限样本偏差。
+2. 得到自然的双重稳健 GMM 风格目标函数。
+3. 使识别假设具有对称性——当无法确定哪个代理变量应作为 `Z`、哪个应作为 `W` 时很有用。
+
+```python
+r = sp.bidirectional_pci(
+    data=df, y="Y", treat="D",
+    proxy_z=["Z"], proxy_w=["W"],
+    covariates=["X1", "X2"],
+)
+```
+
+引文：Min, Zhang & Luo (2025), arXiv:2507.13965。
+
+---
+
+## 针对修正处理策略的 PCI——`sp.pci_mtp`（Park & Ying, 2025）
+
+假设你关心的不是静态的 "`D=1` vs `D=0`" 对比下的 ATE，而是将处理分布平移一定幅度 `δ` 的效果——例如“将每个人的剂量提高 10%”。PCI-MTP 在与基础 PCI 相同的双代理变量结构下识别这种**修正处理策略**效应。
+
+```python
+r = sp.pci_mtp(
+    data=df, y="Y", treat="dose",
+    proxy_z=["Z"], proxy_w=["W"],
+    delta=0.10,                     # ← shift treatment by +10%
+    covariates=["X1", "X2"],
+)
+```
+
+**重要性**：在剂量—反应或连续处理场景中，“固定水平之间的对比”这一估计目标往往没有实际意义。MTP 可在存在未观测混杂的情况下回答与政策相关的问题：“如果稍微调整处理，会发生什么？”
+
+引文：Olivas-Martinez, Gilbert & Rotnitzky (2025), arXiv:2512.12038。
+
+---
+
+## 双重负向对照——`sp.double_negative_control`
+
+这是流行病学中较简单的 PCI 特例：一个*负向对照暴露*（NCE，即已知不会影响 `Y` 的类处理变量）加一个*负向对照结局*（NCO，即已知不会受 `D` 影响的类结果变量）。在加性结构假设下，两者结合即可识别处理效应。
+
+```python
+r = sp.double_negative_control(
+    data=df, y="Y", treat="D",
+    nce="prior_dental_visits",       # placebo treatment
+    nco="baseline_weight",           # placebo outcome
+    covariates=["age", "sex"],
+)
+```
+
+**适用场景**：比完整 PCI 门槛低，适合只有一种处理侧代理变量和一种结果侧代理变量时进行初步分析。单一负向对照版本请参阅：
+`sp.negative_control_outcome` 和 `sp.negative_control_exposure`。
+
+---
+
+## 长期代理指标 + PCI——`sp.proximal_surrogate_index`（Imbens-Kallus-Mao-Wang, 2025）
+
+你进行了一项为期 3 个月的随机实验，但关心的是 2 年期结果。经典解决方案（Athey-Chetty-Imbens-Kang, NBER WP 26463,
+2019 代理指标）要求代理结果完全中介长期效应——这是一个强假设。Imbens、Kallus、Mao 和 Wang 表明，将代理指标与**观测性**数据上的 PCI
+层结合起来，可以放宽完全中介要求：短期代理结果充当 `W`，观测数据中的代理变量充当 `Z`，二者共同识别长期 ATE。
+
+```python
+r = sp.proximal_surrogate_index(
+    experimental=df_exp,           # short-term RCT
+    observational=df_obs,          # long-follow-up observational cohort
+    treatment="feature_flag",
+    surrogates=["dau_90d", "retention_90d"],   # → W
+    proxies=["pre_dau", "pre_purchase"],        # → Z
+    long_term_outcome="revenue_24mo",
+    covariates=["country", "cohort"],
+)
+```
+
+该功能也可作为 `sp.bridge` 中的 `surrogate_pci` 桥函数使用——参见
+[桥接定理](bridging_theorems.qmd)。
+
+引文：Imbens, Kallus, Mao & Wang (2025). "Long-term Causal Inference
+Under Persistent Confounding via Data Combination." *Journal of the Royal
+Statistical Society Series B* 87(2), 362-388. arXiv:2202.07234.
+
+---
+
+## 选择代理变量：`sp.select_pci_proxies`
+
+当你有一组*候选*代理变量时，该辅助函数会依据 PCI 相关的两个维度为每个候选变量评分：
+
+1. **`Z` 得分**——在控制 `X` 后，候选变量在多大程度上可由 `D` 预测？（作为 `Z` 时希望该得分较高。）
+2. **`W` 得分**——在控制 `D, X` 后，候选变量在多大程度上可预测 `Y`？（作为 `W` 时希望该得分较高。）
+
+函数会返回候选变量的排序表，以便你选择各自角色得分最高的变量。
+
+```python
+ranks = sp.select_pci_proxies(
+    data=df, y="Y", treat="D",
+    candidates=["V1", "V2", "V3", "V4", "V5"],
+    covariates=["X1", "X2"],
+    top_k=2,
+)
+print(ranks.z_table)   # best Z candidates
+print(ranks.w_table)   # best W candidates
+```
+
+---
+
+## 如何选择方法——决策指南
+
+```
+恰好有一个 Z 和一个 W，且桥函数看起来近似线性
+  → sp.proximal (default)
+
+桥函数对模型设定选择较敏感
+  → sp.fortified_pci
+
+不确定哪个代理变量应作为 Z、哪个应作为 W
+  → sp.bidirectional_pci
+
+Continuous treatment / want "shift policy" effect
+  → sp.pci_mtp(delta=...)
+
+只有一个负向对照暴露和一个负向对照结局
+  → sp.double_negative_control
+
+希望通过短期实验估计长期效应
+  → sp.proximal_surrogate_index
+
+有多个候选代理变量，不确定该使用哪些
+  → sp.select_pci_proxies first, then the above
+```
+
+---
+
+## 每项 PCI 分析都应报告的诊断
+
+1. **桥函数完备性**：`Z` 能否预测 `W`？（若不能，则无法识别。）运行
+   `sp.regress("W ~ Z + D + X", data=df)` 并检查 F 统计量。
+2. **代理变量独立性**：`Z ⊥ Y | D, U, X`。由于 `U` 未观测，你无法直接检验此条件，但可以检验较弱的 `Z ⊥ Y | D, X`，并将非零系数视为 `U` 介导依赖关系的提示。
+3. **桥函数稳定性**：分别使用 `bridge="linear"` 和 `bridge="loglinear"` 重新运行——若结果差异很大，说明可能存在错设。
+4. **通过 `sp.bridge(kind="cb_ipw", ...)` 进行敏感性分析**，并使用 `(D, X)` 变量对——如果仅使用后门调整 `X` 得出的估计值与 PCI 估计值相同，则样本中的未观测混杂因素可能影响不大。
+
+---
+
+*本指南适用于 StatsPAI ≥ 1.5.0。所有函数均已稳定，并已注册到 `sp.list_functions()` 中。*
+
+<!-- AGENT-BLOCK-START: proximal locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 至少有一个处理侧代理变量 Z（给定 U、X 后与结果独立）
+- 至少有一个结果侧代理变量 W（给定 U、X 后与处理独立）
+- proxy_z 和 proxy_w 从不同角度测量同一个未测量混杂因素 U
+- n ≥ 1000 — 对代理变量进行 2SLS 时噪声较大
+
+**识别假设**
+- 存在一个结果桥函数 h(w, a, x)，可恢复 E[Y(a) | U, X]
+- 给定 U 和 (A, X) 后，Z 与 W 条件独立
+- 给定 U、A、X 后，Z ⊥ Y（Z 上的排除限制）
+- 给定 U、X 后，W ⊥ A（W 上的排除限制）
+- 给定 A、X 后，Z 对 W 具有相关性（桥函数第一阶段）
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| 第一阶段（Z → W）过弱 | `statspai.AssumptionWarning` | 尝试更丰富的 Z 或增加代理变量；如果第一阶段强度不足，则桥函数无法识别。 | `sp.iv` |
+| 代理变量几乎为常量 | `statspai.DataInsufficient` | 代理变量的变异不足——重新设计测量，或退回到敏感性分析（sp.sensemakr）。 | `sp.sensemakr` |
+| 估计值对桥函数设定高度敏感 | `statspai.AssumptionWarning` | 报告多个桥函数族的结果；并与 sp.negative_control_outcome / _exposure 比较。 | `sp.negative_control_outcome` |
+
+**备选方案（按优先级排序）**
+- `sp.negative_control_outcome`
+- `sp.negative_control_exposure`
+- `sp.double_negative_control`
+- `sp.iv`
+- `sp.sensemakr`
+
+**典型最小 N**：1000
+
+<!-- AGENT-BLOCK-END -->

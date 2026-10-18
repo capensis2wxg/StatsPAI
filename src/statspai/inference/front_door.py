@@ -159,7 +159,7 @@ def front_door(
             f"got values {sorted(set(np.unique(D)))[:5]}"
             f"{'...' if len(set(np.unique(D))) > 5 else ''}. "
             "Continuous-D front-door is not shipped in this release — "
-            "see docs/ROADMAP.md. If the front-door criterion is not "
+            "see docs/ROADMAP.qmd. If the front-door criterion is not "
             "required (i.e. no unmeasured confounder blocking the "
             "back-door), use sp.g_computation(..., estimand='dose_response', "
             "treat_values=[d1, d2, ...]) for a dose-response curve under "

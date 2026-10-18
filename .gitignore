@@ -20,9 +20,10 @@ build_and_release.sh
 publish_to_pypi.sh
 
 # Examples (not shipped with the package)
-examples/
+examples/*
+!examples/quickstart.py
 
-# mkdocs build output only — source lives under docs/ and IS tracked
+# Quarto build output; source documentation remains tracked
 
 # Distribution / packaging
 .Python

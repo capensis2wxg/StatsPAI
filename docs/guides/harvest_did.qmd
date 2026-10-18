@@ -1,0 +1,143 @@
+# DID 与事件研究设计的全面汇集（Harvesting）
+
+> Abadie, Angrist, Frandsen & Pischke（NBER WP 34550，2025）。
+
+## 1. “harvesting”（收集）是什么意思
+
+错位采用的面板数据隐含地定义了*许多*有效的双重差分对比：对于每一组（队列 `g`、处理前时期 `t₁`、处理后时期 `t₂`），当 `t₁` 早于处理且 `t₂` 晚于处理，并与在两个时期都*尚未接受处理*的对照队列进行比较时，在平行趋势假设下就会产生无偏的 2×2 DID 估计。
+
+Harvesting 会提取**所有**此类有效的 2×2 估计，并将其合并为一个逆方差加权的总体估计。这是 Callaway–Sant'Anna（2021）ATT(g, t) 的自然推广；当限制为单一时间跨度时，两者的估计量一致。
+
+## 2. API
+
+``` python
+import statspai as sp
+
+res = sp.harvest_did(
+    data=df,
+    unit='unit',
+    time='time',
+    outcome='y',
+    treat='treated',          # binary indicator; cohort inferred
+    # or: cohort='first_treat', never_value=0
+    horizons=range(-3, 5),    # event-time windows (-3..4 by default)
+    reference=-1,             # pre-treatment reference horizon
+    alpha=0.05,
+    weighting='precision',    # 'precision' | 'equal' | 'n_treated'
+)
+print(res.summary())
+```
+
+返回一个标准 `CausalResult`，其中包含 `estimate`、`se`、`ci`。`model_info` 负载包含：
+
+- `event_study`——包含以下列的 DataFrame： `relative_time, att, se, pvalue, n_comparisons`
+- `pretrend_test`——对 horizon `< 0` 的 Wald 联合检验
+- `n_comparisons`——收集到的 2×2 单元总数
+
+`detail` 槽位提供逐项对比表（队列、时间跨度、`t₁`、`t₂`、ATT、SE、捐赠单位数），可用于审计每个单元。
+
+## 3. 错位采用设计示例
+
+```{python}
+#| label: harvest-did-end-to-end
+#| eval: true
+import numpy as np, pandas as pd, statspai as sp
+
+rng = np.random.default_rng(0)
+n_units, n_periods = 120, 12
+cohort = rng.choice([0, 5, 7, 9], size=n_units, p=[0.4, 0.2, 0.2, 0.2])
+rows = []
+for i in range(n_units):
+    uf = rng.normal()
+    g = cohort[i]
+    for t in range(n_periods):
+        D = 1 if (g > 0 and t >= g) else 0
+        y = uf + 0.1 * t + 2.0 * D + rng.normal(0, 0.3)
+        rows.append({'unit': i, 'time': t, 'y': y, 'treated': D})
+df = pd.DataFrame(rows)
+
+res = sp.harvest_did(
+    df, unit='unit', time='time', outcome='y', treat='treated',
+    horizons=range(-3, 5),
+)
+print(res.summary())
+```
+
+## 4. 与相关方法的区别
+
+| 估计量 | 估计目标 | 适用场景 |
+|-------------------|-----------------------------|-------------------------|
+| `sp.callaway_santanna` | ATT(g, t) 基础单元 + 聚合方案 | 需要特定 g×t 热图时 |
+| `sp.sun_abraham` | 交互加权事件研究系数 | 需要清晰的事件研究图时 |
+| `sp.did_imputation`（BJS 2024） | 基于插补且具有一致推断的估计量 | 需要有限样本保证时 |
+| **`sp.harvest_did`** | 对所有有效 2×2 估计进行逆方差加权 | 需要充分利用各单元效率时 |
+
+当效应同质且满足平行趋势时，这四种方法都收敛到同一个真实 ATT；它们的主要区别在于如何对异质性进行加权。
+
+## 5. 清洁对照组规则
+
+一项关键的安全规则：对于比较 `(g, t₁, t₂)`，只有当对照队列在 `max(t₁, t₂)` 时**尚未接受处理**，它才是有效对照。这一规则同时适用于处理后 horizon（`t₂ > t₁`）和处理前安慰剂（`t₂ < t₁`）。
+
+如果你认为数据生成过程（DGP）满足平行趋势，但前趋势 Wald 检验给出 `p < 0.05`，请再次确认 `reference` 和 `horizons` 的组合是否以意料之外的方式跨越了某个队列的处理时间。
+
+## 6. 推断注意事项
+
+`harvest_did` 将每个队列内的**单位**视为相互独立，以计算逐项比较的标准误（单位层面聚类稳健），但在汇总时**忽略跨 horizon 协方差**。若要进行严格的有限样本推断，请将调用放入单位层面的 bootstrap 中：
+
+``` python
+from statspai.inference import bootstrap
+stat = lambda d: sp.harvest_did(d, unit='unit', time='time',
+                                 outcome='y', treat='treated').estimate
+boot = bootstrap(df, stat, n_boot=500, cluster='unit', random_state=0)
+```
+
+## 7. 参考文献
+
+- Abadie, Angrist, Frandsen & Pischke（NBER WP 34550，2025）。 “Harvesting Differences-in-Differences and Event-Study Evidence.”
+- Callaway & Sant'Anna（2021）。“Difference-in-Differences with multiple time periods.” *JoE* 225.
+- Baker, Callaway, Cunningham, Goodman-Bacon & Sant'Anna（2025）。 “Difference-in-Differences Designs: A Practitioner's Guide.” arXiv:2503.13323.
+
+<!-- AGENT-BLOCK-START: did locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件** - 数据为面板数据或含时间列的重复横截面数据 - treat 列为 2x2 设计的二元变量（0/1），或错位设计中的首次处理时期（整数） - 至少有一个处理前时期（2x2 至少需要 ≥ 2 个时期；事件研究建议 ≥ 3 个时期） - 错位设计需要有用于标识跨时期单位的 id 列
+
+**识别假设** - 平行趋势：若不存在处理，处理组和对照组本应遵循相同轨迹 - 无预期效应：处理前时期的结果不受未来处理影响 - SUTVA：单位之间不存在溢出 - 对于错位 / 异质性效应：使用 CS 或 SA——TWFE 可能产生负权重（Goodman-Bacon）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+|------------------|------------------|------------------|------------------|
+| 前趋势联合检验 p \< 0.05（或检验力不足，阈值为 0.10） | `AssumptionViolation` | 使用 sp.sensitivity_rr（Rambachan & Roth 诚实置信区间），或改用 sp.callaway_santanna。 | `sp.sensitivity_rr` |
+| 处理时间错位但使用 TWFE 方法 | `AssumptionWarning` | TWFE 可能产生负权重；使用 Callaway-Sant'Anna、Sun-Abraham 或 BJS 插补法。 | `sp.callaway_santanna` |
+| 前趋势检验检验力不足（Roth 2022） | `AssumptionWarning` | 检查 sp.pretrends_power——若检验力较低，通过 sp.sensitivity_rr 报告诚实置信区间。 | `sp.sensitivity_rr` |
+| 单位层面的聚类数过少 | `AssumptionWarning` | 使用 wild cluster bootstrap（sp.wild_cluster_bootstrap）。 | `sp.wild_cluster_bootstrap` |
+
+**替代方法（按优先级排序）** - `sp.callaway_santanna` - `sp.sun_abraham` - `sp.did_imputation` - `sp.sdid` - `sp.synth`
+
+**典型最小样本量 N**：50
+
+<!-- AGENT-BLOCK-END -->
+
+<!-- AGENT-BLOCK-START: callaway_santanna locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件** - 面板数据包含单位 × 时间 × 结果 - g 列为整数：首次处理期；从未处理的单位记为 0 - 至少有一个从未处理组或较晚处理组作为对照 - 每个队列至少有 ≥ 2 个处理前时期
+
+**识别假设** - 给定 X 的平行趋势（如果提供协变量） - 无预期效应（或使用 anticipation= 参数进行调整） - 重叠：每个队列的倾向得分均为正 - SUTVA
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+|------------------|------------------|------------------|------------------|
+| 聚合 ATT(g,t) 的前趋势检验拒绝原假设 | `AssumptionViolation` | 使用 sp.sensitivity_rr 进行诚实置信区间分析，或添加协变量以满足条件平行趋势。 | `sp.sensitivity_rr` |
+| 队列仅有一个单位——变化不足 | `DataInsufficient` | 合并小队列或删除；检查 sp.diagnose_result。 |  |
+| 所有单位均在同一时间接受处理（没有错开） | `MethodIncompatibility` | 退回使用 sp.did(method='2x2') 进行 2x2 DID。 | `sp.did` |
+
+**替代方法（按优先级排序）** - `sp.sun_abraham` - `sp.did_imputation` - `sp.sdid` - `sp.did`
+
+**典型最小样本量 N**：50
+
+<!-- AGENT-BLOCK-END -->

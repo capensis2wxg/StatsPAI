@@ -1,0 +1,118 @@
+# 分期处理下的双重差分——Callaway & Sant'Anna (2021)
+
+StatsPAI 从基本原理出发实现了 Callaway–Sant'Anna 估计器，与 R 的 `did`
+软件包核心功能相匹配，并在此基础上增加了新的便捷功能。
+
+## 基本用法
+
+```python
+import statspai as sp
+
+cs = sp.callaway_santanna(
+    df,
+    y='earnings',        # outcome
+    g='first_treat',     # first-treatment period (0 = never-treated)
+    t='year',            # time period
+    i='worker_id',       # unit id
+    estimator='dr',      # 'dr' (default), 'ipw', or 'reg'
+    control_group='nevertreated',  # or 'notyettreated'
+    anticipation=0,      # periods of anticipation (CS2021 §3.2)
+)
+
+print(cs.summary())
+cs.detail              # one row per (group, time) with ATT + pointwise CI
+cs.model_info['event_study']   # event-study aggregation
+cs.model_info['pretrend_test'] # joint Wald pre-trend test
+```
+
+## 使用同时置信带进行聚合
+
+原始 `callaway_santanna()` 结果是一个 ATT(g, t) 估计值网格。
+可使用 `aggte()` 将其汇总为标量或事件研究曲线。该函数会在估计结果上
+叠加 Mammen (1993) 乘子自助法，并返回**同时**置信带：
+
+```python
+es = sp.aggte(cs, type='dynamic',
+              n_boot=500, random_state=0,
+              balance_e=3)        # balance across cohorts for e ≤ 3
+
+print(es.detail)
+# relative_time  att  se  ci_lower  ci_upper  cband_lower  cband_upper ...
+```
+
+`cband_lower` / `cband_upper` 列给出 sup-t 均匀置信带——该置信带对整个事件窗口内的同时推断有效，
+而逐点置信区间则不具备这一性质。
+
+其他聚合类型：
+
+| `type=` | 含义 |
+| --- | --- |
+| `'simple'` | 按队列占比加权的总体 ATT |
+| `'dynamic'` | 事件研究曲线 ATT(e) |
+| `'group'` | 每个队列的平均 ATT(g) |
+| `'calendar'` | 每个日历时间点的 ATT(t) |
+
+## 重复截面
+
+如果观测值并未跨时间匹配（例如 CPS 合并截面数据），请传入
+`panel=False`。估计器会切换为无条件 2×2 单元格均值 DID，并使用观测层面的影响函数；下游的 `aggte`、`cs_report`、`ggdid` 和 `honest_did`
+均可照常使用。
+
+```python
+cs_rcs = sp.callaway_santanna(
+    survey_df,
+    y='wage', g='first_treat', t='year', i='respondent_id',
+    estimator='reg',         # only 'reg' supported in RCS mode
+    x=['age', 'education'],  # optional covariate residualisation
+    panel=False,
+)
+```
+
+## 敏感性分析——Rambachan & Roth (2023)
+
+所有事件研究结果（来自 CS、SA、BJS 或 `aggte`）都可用于 Rambachan–Roth 敏感性分析框架：
+
+```python
+sens = sp.honest_did(es, e=2)     # robust CI at e=2 across an M grid
+m_star = sp.breakdown_m(es, e=2)  # largest M* under which effect is significant
+```
+
+## 一次调用生成报告
+
+如需可直接用于发表的摘要——包含原始估计、带均匀置信带的四种聚合、
+前趋势 Wald 检验，以及每个处理后事件期的 R-R 临界值 M*——请调用
+[`cs_report()`](cs_report.qmd)。
+
+<!-- AGENT-BLOCK-START: callaway_santanna locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 面板数据，包含单位 × 时间 × 结果变量
+- g 列为整数：首次处理期；从未处理的单位取值为 0
+- 至少有一个从未处理或较晚处理的对照组
+- 每个队列至少有 ≥ 2 个处理前时期
+
+**识别假设**
+- 给定 X 的条件平行趋势（如果提供协变量）
+- 无预期效应（或通过 `anticipation=` 参数进行调整）
+- 重叠性：每个队列的倾向得分均为正
+- SUTVA
+
+**失败模式 → 恢复措施**
+
+| 现象 | 异常 | 处理方法 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 聚合后的 ATT(g,t) 前趋势检验拒绝原假设 | `AssumptionViolation` | 使用 sp.sensitivity_rr 计算诚实置信区间，或添加协变量以满足条件平行趋势。 | `sp.sensitivity_rr` |
+| 队列只有一个单位——变异不足 | `DataInsufficient` | 合并较小队列或将其删除；检查 sp.diagnose_result。 |  |
+| 所有单位都在同一时间接受处理（没有分期） | `MethodIncompatibility` | 改用 sp.did(method='2x2') 进行 2x2 DID。 | `sp.did` |
+
+**替代方法（按优先顺序）**
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.did`
+
+**典型最小 N**：50
+
+<!-- AGENT-BLOCK-END -->

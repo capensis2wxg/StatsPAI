@@ -1,0 +1,322 @@
+# 共形因果推断——完整方法体系
+
+> **“你的 CATE 点估计是一个数值。你的 CATE 预测区间则是一项承诺。”**共形推断是唯一一种能够在**有限样本**下为个体处理效应区间提供覆盖率保证，且对结果分布**不作任何**假设的方法框架。StatsPAI 提供了 2021 年 Lei-Candès 奠基性方法以及 2024-2026 年的前沿扩展：协变量偏移、基于密度的 HDR、多阶段、去偏 ML、公平性、连续处理和干扰。
+
+如果 CATE 输出中的“95% 预测区间”来自 bootstrap 或正态近似，那么你并没有覆盖率保证——你只有一个关于覆盖率的**猜测**。共形推断用一个定理取代猜测：只要校准数据和测试数据可交换，有限样本中的经验覆盖率就会达到名义水平。下面十种估计量各自放宽了 Lei-Candès 2021 的一项假设，以应对现实中的具体问题。
+
+所有函数均位于顶层：`sp.conformal_cate`、 `sp.weighted_conformal_prediction`、`sp.conformal_counterfactual`、 `sp.conformal_ite_interval`、`sp.conformal_density_ite`、 `sp.conformal_ite_multidp`、`sp.conformal_debiased_ml`、 `sp.conformal_fair_ite`、`sp.conformal_continuous`、 `sp.conformal_interference`。
+
+------------------------------------------------------------------------
+
+## 共形推断保证的两件事
+
+对于测试点 `x` 和目标覆盖率 `1 - α`：
+
+1.  **边际覆盖率** `P(τ(x) ∈ [L(x), U(x)]) ≥ 1 − α`——对随机测试点和校准集取平均后，区间至少有 `1 − α` 的概率包含真实值。
+2.  **有限样本有效性**——该保证适用于任意样本量 `n`，而不仅仅是渐近情况。
+
+不保证条件覆盖率（`P(τ(x) ∈ [L(x), U(x)] | X=x) ≥ 1 − α`）；若没有额外假设，这种保证是不可能实现的。有人说“CQR 能提供条件覆盖率”，其含义是它的条件覆盖率**优于普通拆分共形方法**，而非具有字面意义上的条件有效性。
+
+------------------------------------------------------------------------
+
+## 1. 基准方法——`sp.conformal_cate`（Lei-Candès 2021）
+
+使用分别拟合的结果模型 `μ_1(x)`、`μ_0(x)` 以及组合校准分位数 `q_1 + q_0`，为 CATE 计算拆分共形预测区间。默认结果模型为梯度提升模型。
+
+``` python
+r = sp.conformal_cate(
+    data=df, y="y", treat="d",
+    covariates=["x1", "x2", "x3"],
+    alpha=0.05,
+    calib_fraction=0.25,
+    random_state=42,
+)
+cate        = r.model_info["cate"]         # point estimate per row
+cate_lower  = r.model_info["cate_lower"]   # lower bound of PI
+cate_upper  = r.model_info["cate_upper"]   # upper bound
+width       = r.model_info["interval_width"]  # mean width
+```
+
+**适用场景**：观测数据或实验数据、二元处理变量、随机校准-测试拆分可合理视为可交换，且希望为每个观测值提供一个覆盖率数值。默认选择。
+
+参考文献：Lei & Candès（2021），*JRSS-B* 83(5)。
+
+------------------------------------------------------------------------
+
+## 2. 校正协变量偏移的反事实区间——`sp.conformal_counterfactual`
+
+这一改进使得逐处理组共形方法能够适用于**基于可观测变量的处理选择**。处理组和对照组的协变量分布不同；`conformal_counterfactual` 使用倾向得分作为 Tibshirani-Barber-Candès-Ramdas（2019）权重，将每个校准集重新加权到边际 X 分布：
+
+``` python
+r = sp.conformal_counterfactual(
+    data=df, y="y", treat="d", covariates=["x1", "x2"],
+    X_test=df[["x1", "x2"]].values,
+    alpha=0.1,
+    calib_frac=0.3,
+)
+r.summary()       # per-arm coverage target + mean band widths
+r.to_frame()      # columns: Y1_lower, Y1_upper, Y0_lower, Y0_upper
+```
+
+**适用场景**：处理分配并非随机的观测数据，且你需要**反事实潜在结果** `Y(1) | X` 和 `Y(0) | X`（而非仅它们的差值）的预测区间。
+
+参考文献：Lei & Candès（2021）定理 1；Tibshirani 等（2019），*NeurIPS*。
+
+------------------------------------------------------------------------
+
+## 3. ITE 区间（嵌套界限）——`sp.conformal_ite_interval`
+
+这是 Lei-Candès 式（3.4）中针对个体处理效应 `τ(x) = Y(1) − Y(0)` 的嵌套界限。它由两个逐处理组共形带构成，每个置信水平为 `α/2`，因此通过简单的并集界可使合并区间达到有限样本覆盖率 `≥ 1 − α`：
+
+``` python
+r = sp.conformal_ite_interval(
+    data=df, y="y", treat="d", covariates=["x1", "x2"],
+    alpha=0.1, calib_frac=0.3,
+)
+r.summary()
+r.to_frame()      # columns: tau, tau_lower, tau_upper
+```
+
+**适用场景**：你需要一个**保守**但具有有限样本有效性的 ITE 区间。这里的“保守”指“比必要范围更宽”；这是不需要分布假设所付出的代价。如果区间宽得无法使用，可以尝试 `conformal_density_ite` 或 `conformal_debiased_ml`。
+
+参考文献：Lei & Candès（2021），式（3.4）。
+
+------------------------------------------------------------------------
+
+## 4. 通用协变量偏移共形方法——`sp.weighted_conformal_prediction`
+
+底层原语：使用任意校准权重进行拆分共形。如果你从外部数据源获知密度比 `w(x) = f_test(x) / f_train(x)`，这会很有用：
+
+``` python
+lower, upper, point = sp.weighted_conformal_prediction(
+    X_train, y_train,
+    X_calib, y_calib, X_test,
+    weights_calib=w,             # likelihood-ratio weights
+    model=my_sklearn_model,
+    alpha=0.1,
+)
+```
+
+**适用场景**：你在自定义流程中使用共形方法，需要注入权重。大多数用户不需要直接调用此方法——`conformal_counterfactual` 会在内部调用它。
+
+参考文献：Tibshirani、Barber、Candès、Ramdas（2019），*NeurIPS*。
+
+------------------------------------------------------------------------
+
+## 5. 条件密度 ITE——`sp.conformal_density_ite`（2025）
+
+当反事实分布**重尾或多峰**时，基于均值的共形区间可能会过宽且偏离中心，从而产生误导。`conformal_density_ite` 基于 ITE 残差分布的 KDE 构造最高密度区域（HDR），给出更窄（且可能不对称）的区间：
+
+``` python
+r = sp.conformal_density_ite(
+    data=df, y="y", treat="d",
+    covariates=["x1", "x2"],
+    alpha=0.1,
+    bandwidth=None,        # Silverman's rule; override with a float
+    seed=0,
+)
+print(r.intervals)         # (n_test, 2)
+print(r.point_estimate)    # ITE mean per row
+```
+
+**适用场景**：反事实分布明显非高斯。一个典型迹象是：在留出折上覆盖率保持不变的同时，`r.intervals[:, 1] - r.intervals[:, 0]` 明显窄于 `conformal_ite_interval` 得到的区间。
+
+引用：arXiv:2501.14933（2025）。
+
+------------------------------------------------------------------------
+
+## 6. 多阶段 ITE（DTR）——`sp.conformal_ite_multidp`（2025）
+
+动态处理方案和多阶段决策：在阶段 `k`，处理根据截至阶段 `k−1` 的历史信息决定，而最终 ITE 是各阶段效应的累积。联合覆盖率通过对每阶段采用 Bonferroni 校正 `α/K` 来实现：
+
+``` python
+r = sp.conformal_ite_multidp(
+    data=df,
+    y_per_stage=["y1", "y2", "y3"],
+    treat_per_stage=["d1", "d2", "d3"],
+    history_per_stage=[
+        ["x_base"],                       # stage 1 features
+        ["x_base", "y1", "d1"],           # stage 2 features
+        ["x_base", "y1", "d1", "y2", "d2"],
+    ],
+    alpha=0.1,
+)
+print(r.intervals_per_stage)     # K arrays of (n_test, 2)
+print(r.cumulative_interval)     # sum across stages
+```
+
+**适用场景**：DTR、序贯 RCT（SMART），或第 `k` 次决策取决于先前结果和决策的任意临床 / 商业流程。Bonferroni 方法较保守——如果 `K` 较大且你需要更紧的置信带，可以考虑使用留出测试集进行逐阶段重新校准。
+
+引用：arXiv:2512.08828（2025）。
+
+------------------------------------------------------------------------
+
+## 7. 去偏 ML 共形方法——`sp.conformal_debiased_ml`（2026）
+
+使用**交叉拟合 AIPW** 得分作为非一致性度量基础，而非原始结果残差。由此得到的区间具有**双重稳健性**——即使结果模型或倾向得分模型其中之一存在中等程度的错误设定，只要乘积误差率为 `o_p(n^{-1/2})`，覆盖率保证仍然成立：
+
+``` python
+r = sp.conformal_debiased_ml(
+    data=df, y="y", treat="d",
+    covariates=["x1", "x2"],
+    alpha=0.1,
+    n_folds=5,
+    seed=0,
+)
+print(r.intervals)
+print(r.point_estimate)
+```
+
+**适用场景**：观测数据、你怀疑某个干扰参数模型存在设定错误，并希望通过 AIPW 残差化获得更强稳健性。隐性成本是需要额外拟合 `n_folds` 个模型——当 `n ≤ 100k` 时可以接受。
+
+引用：arXiv:2604.03772（2026）。
+
+------------------------------------------------------------------------
+
+## 8. 反事实公平共形方法——`sp.conformal_fair_ite`（2025）
+
+增加了一项公平性约束：**不同受保护子群体（种族、性别、SES）的覆盖率必须相同**。该方法按组计算校准分位数，并同时报告各组区间和合并区间：
+
+``` python
+r = sp.conformal_fair_ite(
+    data=df, y="y", treat="d",
+    covariates=["x1", "x2"],    # protected is auto-excluded from regression
+    protected="race",
+    alpha=0.1,
+)
+print(r.group_widths)               # dict: group → interval width
+print(r.group_coverage_targets)     # dict: group → nominal coverage
+```
+
+**适用场景**：医疗、信贷、招聘、刑事司法等受监管应用，其中不同受保护群体之间的覆盖率差异既是统计问题，也是公平性违规。如果某个组的校准点少于 5 个，估计量**会退回使用覆盖充分的组中的最大分位数**——这样可以保留各组覆盖率保证，但代表性不足的组会得到更宽的区间。如果**所有**组的样本量都很小，则会发出 `warnings.warn`，且不能保证各组覆盖率。
+
+引用：arXiv:2510.08724（2025）。
+
+------------------------------------------------------------------------
+
+## 9. 连续处理的剂量反应——`sp.conformal_continuous`（2024）
+
+对于连续处理，目标是剂量网格上各点的**剂量反应曲线** `E[Y | T=t, X]`。该方法为网格中的每个 `t` 生成拆分共形置信带：
+
+``` python
+r = sp.conformal_continuous(
+    data=train_df, y="y", treatment="dose",
+    covariates=["x1", "x2"],
+    test_data=test_df,
+    dose_grid=np.linspace(0, 1, 21),
+    alpha=0.1,
+)
+print(r.predictions)       # point + band at each test row's observed dose
+print(r.dose_curves)       # full curve per test row across the grid
+```
+
+**适用场景**：剂量反应分析，例如药物剂量、肥料施用量、应用程序使用时长。返回网格上每个 `(test_row, dose)` 对应的点估计和置信带。
+
+引用：Schröder 等（arXiv:2407.03094，2024）。
+
+------------------------------------------------------------------------
+
+## 10. 簇可交换共形方法——`sp.conformal_interference`（2021/2025）
+
+当一个簇内的单位存在**干扰**（溢出效应、网络效应）时，单位层面的可交换性不再成立，但**簇层面的**可交换性仍可能成立。该方法计算簇平均残差得分，并在簇层面执行拆分共形：
+
+``` python
+r = sp.conformal_interference(
+    data=df, y="y", treatment="d", cluster="village",
+    covariates=["x1", "x2"],
+    test_clusters=["v101", "v102", "v103"],
+    alpha=0.1,
+)
+print(r.predictions)        # cluster, prediction, lo, hi
+print(r.cluster_scores)     # per-calibration-cluster mean |residual|
+```
+
+**适用场景**：簇内违反 SUTVA，但簇之间相互独立（村庄、学校、公司）。至少需要 `≥ 4` 个非测试簇——少于此数时，校准分位数没有意义。
+
+参考文献：Lei、Sesia & Candès（2021）；arXiv:2509.21660（2025）的系统综述将其推荐为存在干扰时的默认方法。
+
+------------------------------------------------------------------------
+
+## 决策指南
+
+```         
+二元处理下每个单位的 CATE 点估计与区间
+  → sp.conformal_cate
+
+我想分别获得 Y(1) | X 和 Y(0) | X 的置信带
+  → sp.conformal_counterfactual
+
+我想获得 τ(x) = Y(1) - Y(0) 的 ITE 区间
+  → sp.conformal_ite_interval
+
+---
+
+反事实分布是重尾分布 / 双峰分布
+  → sp.conformal_density_ite
+
+我的决策问题包含 K 个连续阶段
+  → sp.conformal_ite_multidp
+
+我的干扰参数模型可能设定错误
+  → sp.conformal_debiased_ml
+
+我需要确保各受保护子群体具有相同覆盖率
+  → sp.conformal_fair_ite
+
+---
+
+处理变量是连续的——我需要剂量—反应曲线
+  → sp.conformal_continuous
+
+单位在群组内部相互干扰（群组内 SUTVA 不成立）
+  → sp.conformal_interference
+
+---
+
+我有自定义流程，需要加权拆分共形方法
+  → sp.weighted_conformal_prediction  （底层原语）
+```
+
+------------------------------------------------------------------------
+
+## 每项共形分析都应报告的诊断
+
+1.  **留出折上的经验覆盖率。**理论保证针对的是边际覆盖率，而非条件覆盖率；始终应在新的测试拆分上检查覆盖率是否达到名义水平，而不能只检查校准折。
+2.  **区间的平均宽度和中位数宽度。**保证针对覆盖率；区间宽度则反映你为此付出的代价。如果中位数宽度约等于 `Y` 的整个取值范围，那么你报告的就是“什么都有可能”，虽然正确，却毫无用处。
+3.  **分组覆盖率**（即使未使用 `conformal_fair_ite`）。即使边际覆盖率在名义上有效，子群体的覆盖率也可能严重偏离。请报告关键协变量条件下的覆盖率。
+4.  **校准集大小。**边际覆盖率要求 `n_calib ≥ 1/α ≈ 10`（`α = 0.1`）。如果校准集更小（分层后尤其常见于 `conformal_fair_ite`），分位数 `ceil((1-α)(n+1)) / n` 会截断为 1，从而得到 `[-∞, +∞]` 区间。请检查 `r.model_info['n_calib']` 或相应字段。
+5.  **倾向得分重叠。**对于 `conformal_counterfactual` 和 `conformal_ite_interval`，请确认 `ps ∈ [0.02, 0.98]`。接近边界时，TBCR 权重 `1/g(X)` 会急剧增大，使置信带任意变宽。
+
+------------------------------------------------------------------------
+
+## 如何理解结果差异
+
+如果 `conformal_cate` 和 `conformal_ite_interval` 的覆盖率或区间宽度不同，通常是因为 `conformal_cate` 使用 `q_1 + q_0`（逐处理组分位数之和），而 `ite_interval` 使用 `Δ_1(x) + Δ_0(x)`（将 `α/2` 分配给两个处理组后得到的逐组半宽度之和）。后者**总是**至少与前者一样保守。如果你希望得到最紧的有限样本区间，且结果模型设定良好，请使用 `conformal_cate`。如果你希望采用理论保证最充分的方法，请使用 `conformal_ite_interval`。
+
+如果 `conformal_cate` 和 `conformal_debiased_ml` 得到的区间宽度差异很大，则结果模型可能存在设定错误。AIPW 得分的渐近方差较小，因此如果 `debiased_ml` 的区间更窄且覆盖率保持良好，这是一个**积极信号**。
+
+------------------------------------------------------------------------
+
+*适用于 StatsPAI ≥ 1.5.0。所有函数均已注册；`sp.describe_function("conformal_ite_interval")` 会返回手写的 schema。关于 dispatcher 风格的调用，请参阅 `sp.conformal(kind=...)`。*
+
+<!-- AGENT-BLOCK-START: conformal locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件** - 校准样本与训练样本不重叠（自动拆分或由用户提供） - 校准分布与测试分布可交换（协变量偏移时使用加权变体） - 对 CATE / ITE 变体：协变量满足无混杂性及重叠条件 - 当 alpha ≤ 0.1 时，至少需要 500 个校准观测值，才能获得可靠的有限样本覆盖率
+
+**识别假设** - 校准点与测试点可交换（基准情况） - 对 `kind='weighted'`：校准分布与测试分布之间的密度比已知或可估计 - 对 `kind='cate'` / `kind='ite'`：基于可观测变量进行处理选择，且倾向得分 / 结果模型正确 - 对 `kind='interference'`：簇层面可交换
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+|------------------|------------------|------------------|------------------|
+| 校准分布与测试分布不同（协变量偏移） | `statspai.AssumptionViolation` | 使用 `kind='weighted'` 并估计密度比。 |  |
+| 校准集过小——区间过宽 | `statspai.DataInsufficient` | 增加校准样本，或提高 alpha；样本量低于约 100 时覆盖率保证会变宽松。 |  |
+| CATE/ITE 的干扰参数（倾向得分 / 结果）未校准 | `statspai.AssumptionWarning` | 使用 `kind='debiased'`，通过 DML 风格的干扰参数处理实现正交化。 |  |
+
+**替代方法（按优先级排序）** - `sp.conformal_cate` - `sp.weighted_conformal_prediction` - `sp.conformal_counterfactual`
+
+**典型最小样本量 N**：500
+
+<!-- AGENT-BLOCK-END -->

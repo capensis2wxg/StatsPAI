@@ -1,0 +1,77 @@
+# 多层 / 混合效应模型
+
+`statspai.multilevel` 提供线性和广义线性混合模型，与 `lme4` / Stata
+`mixed` / `meglm` 兼容，并在 v0.9.3 中完成重写。
+
+## 线性混合模型 — `sp.mixed`
+
+```python
+r = sp.mixed(
+    df, y='math_score', x=['ses', 'gender'],
+    group='school',                            # 两层结构
+    # group=['school', 'class'],               # 三层嵌套结构
+    re_formula='1 + ses',                      # 随机截距 + 随机斜率
+    cov_type='unstructured',                   # 默认值；也可选 'diagonal' 或 'identity'
+    method='reml',                             # 也可选 'ml'
+)
+r.summary()
+r.variance_components                          # σ² 估计值字典
+r.ranef(conditional_se=True)                   # BLUP 及其后验标准误
+r.r_squared()                                  # Nakagawa-Schielzeth 边际及条件 R²
+r.predict(new_data, include_random=True)       # 总体预测或组条件预测
+r.wald_test({'ses': 0, 'gender': 0})           # 线性约束检验
+r.plot(kind='caterpillar')                     # BLUP 森林图
+```
+
+## 广义线性混合模型
+
+```python
+# 二项分布 / logit 链接
+sp.melogit(df, 'y', ['x1','x2'], group='school', nAGQ=7)
+
+# 泊松分布 / log 链接
+sp.mepoisson(df, 'count', ['x1'], group='region', offset='log_pop', nAGQ=11)
+
+# Gamma / log（v0.9.3 新增）
+sp.megamma(df, 'cost', ['severity'], group='hospital', nAGQ=15)
+
+# 负二项分布 NB-2（v0.9.3 新增；别名 family='negbin'）
+sp.menbreg(df, 'events', ['exposure'], group='county', nAGQ=7)
+
+# 有序 logit，包含 K−1 个重新参数化的阈值（v0.9.3 新增）
+sp.meologit(df, 'severity_cat', ['age','sex'], group='site', nAGQ=7)
+
+# 通用 GLMM 分发器
+sp.meglm(df, 'y', ['x'], group='g',
+         family='binomial', link='logit', nAGQ=7)
+
+r.odds_ratios()                # logit / 有序模型
+r.incidence_rate_ratios()      # Poisson / 负二项模型
+r.predict(new_data, type='response' | 'linear')
+```
+
+### `nAGQ` — 自适应 Gauss–Hermite 求积
+
+- `nAGQ=1` — Laplace 近似（已验证与精确 Laplace 公式的误差小于 1e-10）。
+- `nAGQ>1` — 自适应 GHQ；在小型、非高斯结果的聚类数据上与 Stata `intpoints(7)` 和 `lme4::glmer(nAGQ=7)` 一致。
+- `nAGQ>1` 仅适用于单标量随机效应模型（与 `lme4` 的限制相同）；多斜率 AGHQ 暂未实现，因为计算成本按 `nAGQ^q` 增长。
+
+## 诊断
+
+| 函数 | 用途 |
+| --- | --- |
+| `sp.icc(result)` | 组内相关系数及 delta 方法 logit 尺度置信区间 |
+| `sp.lrtest(restricted, full)` | 检验方差分量时，采用 Self-Liang 混合 $\bar\chi^2$ 边界修正的似然比检验 |
+| `result.aic()` / `result.bic()` | 含完整归一化常数的信息准则（Poisson / 二项分布），可跨分布族比较 |
+
+## 验证
+
+- 在随机截距和非结构化随机斜率设定下，LMM 固定效应和方差分量与
+  `statsmodels.MixedLM` 的结果一致，精确到小数点后四位。
+- 三层嵌套结构的方差分量可联合识别，并与
+  `statsmodels.MixedLM(..., re_formula="1", vc_formula={...})` 的结果一致，
+  精确到小数点后两位。
+- GLMM 参数恢复测试确认斜率和随机截距方差均处于预期抽样范围内。
+- 53 项测试通过（原有 35 项，GLMM 强化新增 18 项：
+  `TestAGHQ × 7`, `TestMEGamma × 3`, `TestMENegBin × 3`,
+  `TestMEOLogit × 5`).

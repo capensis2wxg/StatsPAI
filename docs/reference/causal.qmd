@@ -1,0 +1,84 @@
+# 因果机器学习：因果森林、元学习器、TMLE 与神经网络
+
+基于机器学习的异质性处理效应估计方法。
+
+## 因果森林
+
+``` python
+r = sp.causal_forest(df, y='y', treat='d', covariates=[...],
+                     n_estimators=2000,
+                     honest=True,
+                     min_samples_leaf=5)
+r.cate(new_X)                  # 新个体的条件 ATE
+r.variable_importance()
+r.subgroup_test(by='age_bin')  # 检验异质性
+```
+
+## 元学习器
+
+| 学习器 | 说明 | 参考文献 |
+|------------------------|------------------------|------------------------|
+| `sp.s_learner` | 单模型学习器，使用 `(X, D)` | Künzel 等（2019） |
+| `sp.t_learner` | 双模型学习器，分别拟合处理组和对照组 | Künzel 等（2019） |
+| `sp.x_learner` | 结合 S 与 T 学习器的交叉学习器 | Künzel 等（2019） |
+| `sp.r_learner` | 残差化学习器（Robinson 风格） | Nie 与 Wager（2021） |
+| `sp.dr_learner` | 双重稳健学习器，结合结果模型与倾向得分模型 | Kennedy（2023） |
+
+``` python
+r = sp.x_learner(df, y='y', treat='d', covariates=[...],
+                 ml_model='rf')
+r.cate(new_X)
+```
+
+此外，`sp.cate_diagnostics(r)` 可生成重叠性、校准度和 CATE QQ 图。
+
+## TMLE
+
+``` python
+r = sp.tmle(df, y='y', treat='d', covariates=[...],
+            sl_library=['rf','lasso','xgb'])    # Super Learner 集成
+r.ate, r.ci
+```
+
+## 神经因果模型
+
+``` python
+sp.tarnet(df, y='y', treat='d', covariates=[...],
+          epochs=100, hidden=[200,100])          # Shalit、Johansson、Sontag（2017）
+sp.cfrnet(df, ..., imbalance='wass',            # 反事实回归网络
+          alpha=1.0)
+sp.dragonnet(df, ..., targeted_regularization=True)  # Shi, Blei, Veitch (2019)
+sp.deepiv(df, y='y', treat='d', instrument='z',     # Hartford et al. (2017)
+          covariates=[...])
+```
+
+## 因果发现
+
+``` python
+sp.notears(df, threshold=0.3, lambda1=0.1)          # Zheng 等，2018
+sp.pc_algorithm(df, alpha=0.05)                     # Spirtes-Glymour-Scheines
+sp.lingam(df)                                       # Shimizu，2006
+sp.ges(df, score='bic')                             # Chickering，2002
+```
+
+## 策略学习
+
+``` python
+sp.policy_tree(df, y='y', treat='d', covariates=[...],
+               depth=3)                              # Athey-Wager，2021
+sp.policy_value(tree, df_test)
+```
+
+## 贝叶斯因果森林
+
+``` python
+sp.bcf(df, y='y', treat='d', covariates=[...],
+       n_mcmc=2000, n_burn=1000)                     # Hahn、Murray、Carvalho，2020
+```
+
+## 保形因果推断与矩阵补全
+
+``` python
+sp.conformal_cate(df, ...)                          # 无分布假设的 CATE 区间
+sp.mc_nnm(df, ...)                                  # Athey 等，2021，MC-NNM
+```

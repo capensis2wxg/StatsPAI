@@ -1,0 +1,82 @@
+# 回归不连续设计
+
+`statspai.rd` 在 14 个模块中提供 18 种以上 RD 估计器、诊断和推断方法（v0.9.1，约 10,300 行代码）。
+
+## 核心估计
+
+```python
+# 锐断点 / 模糊断点 / 回归折点设计，采用偏差校正稳健推断
+r = sp.rdrobust(df, y='earnings', x='score', c=0,
+                fuzzy='treatment',                # 可选：模糊断点设计
+                deriv=1,                          # sharp=0，kink=1
+                covs=['age', 'sex'],              # Calonico 等（2019）的协变量调整
+                bwselect='mserd',                 # 'mserd'|'msetwo'|'certwo'|'cerrd'
+                kernel='triangular',              # 'triangular'|'epanechnikov'|'uniform'
+                vce='hc3',                        # 'hc0'–'hc3' | 'cluster'
+)
+
+# 二维 / 边界 RD
+r = sp.rd2d(df, y='y', x1='lon', x2='lat', boundary_coords=...)
+
+# 回归折点设计（Card、Lee、Pei、Weber，2015）
+r = sp.rkd(df, y='ui_benefits', x='earnings', c=cutoff)
+
+# 运行变量处的意向处理效应（RDIT）
+r = sp.rdit(df, y='y', x='x', c=0, covs=['z'])
+```
+
+## 诚实推断与局部随机化
+
+```python
+# 在平滑度界限下计算 Armstrong-Kolesar 诚实置信区间
+sp.rdhonest(df, y='y', x='x', c=0, M=0.1, kernel='triangular')
+
+# 局部随机化（Cattaneo-Titiunik-Vazquez-Bare）
+sp.rdrandinf(df, y='y', x='x', c=0, wl=-2, wr=2)
+sp.rdwinselect(df, y='y', x='x', c=0)      # window selection
+sp.rdsensitivity(df, y='y', x='x', c=0)    # sensitivity to window
+```
+
+## 诊断
+
+```python
+sp.cjm_density(df, x='score', c=0)          # Cattaneo-Jansson-Ma density
+sp.mccrary_density(df, x='score', c=0)      # McCrary legacy
+sp.rdplot(df, y='y', x='x', c=0)            # binned-scatter RD plot
+```
+
+## 异质性处理效应
+
+```python
+sp.rdhte(df, y='y', x='x', c=0, by='group')    # by-subgroup CATE
+sp.rd_forest(df, y='y', x='x', c=0, covs=[...])
+sp.rd_boost(df, y='y', x='x', c=0, covs=[...])
+sp.rd_lasso(df, y='y', x='x', c=0, covs=[...])
+```
+
+## 外部有效性（Angrist-Rokkanen）
+
+```python
+sp.rd_extrapolate(df, y='y', x='x', c=0,
+                  conditioning=['z1','z2'])     # conditioning on covariates
+```
+
+## 检验效能分析
+
+```python
+sp.rdpower(df, y='y', x='x', c=0, tau=1.5)
+sp.rdsampsi(df, y='y', x='x', c=0, tau=1.5, power=0.80)
+```
+
+## 一键式分析面板
+
+```python
+sp.rdsummary(df, y='earnings', x='score', c=0)
+# 输出 CCT 锐断点 / 稳健估计、带宽、密度检验、
+# 安慰剂断点、协变量平衡、证伪检查、
+# 偏差校正置信区间、诚实置信区间和综合诊断图。
+```
+
+## 验证
+
+97 项 RD 测试通过。`rd/_core.py` 将原先分散在 9 个文件中的核函数、加权最小二乘和夹心方差基础实现整合为单个 191 行的标准模块。

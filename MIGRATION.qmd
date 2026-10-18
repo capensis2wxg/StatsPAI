@@ -1,0 +1,144 @@
+# StatsPAI 版本迁移与从 PyStataR 迁移
+
+本文先介绍 StatsPAI 版本间的迁移，随后说明如何从 `PyStataR` 迁移至
+`StatsPAI`。
+
+---
+
+## v1.5.x → Agent 原生基础设施（尚未发布）
+
+此版本仅增加功能，现有代码**无需迁移**。本节说明新增的 Agent 原生功能。
+
+### 1. 异常分类体系（新增公开模块）
+
+```python
+from statspai.exceptions import (
+    AssumptionViolation, IdentificationFailure,
+    DataInsufficient, ConvergenceFailure,
+    NumericalInstability, MethodIncompatibility,
+)
+```
+
+领域异常继承自对应的标准库异常（`ValueError` / `RuntimeError`），因此现有
+`try / except ValueError` 仍可捕获 `AssumptionViolation` 和
+`DataInsufficient`，`except RuntimeError` 仍可捕获 `ConvergenceFailure` 和
+`NumericalInstability`。调用位置无需改动。
+
+新代码宜使用具体的异常子类，并附带 `recovery_hint`：
+
+```python
+raise AssumptionViolation(
+    "Parallel trends rejected at p=0.003",
+    recovery_hint="Run sp.sensitivity_rr for Rambachan-Roth honest CI.",
+    diagnostics={"test": "pretrends", "pvalue": 0.003},
+    alternative_functions=["sp.sensitivity_rr", "sp.callaway_santanna"],
+)
+```
+
+### 2. Agent 原生结果方法
+
+- `result.violations()` — 以结构化列表返回假设 / 诊断问题，包含
+  `severity` / `recovery_hint` / `alternatives`。
+- `result.to_agent_summary()` — 返回可序列化为 JSON 的结构化数据。
+- 这些方法用于补充（而非替代）现有的 `summary()` / `tidy()` /
+  `next_steps()`。
+
+### 3. Registry Agent 卡片
+
+- `sp.agent_card(name)` — 完整元数据，包括前置条件、假设、带恢复提示的失败模式、
+  排序后的替代方法和典型最小样本量 N。
+- `sp.agent_cards(category=None)` — 批量导出至少包含一个 Agent 原生字段的条目
+  （目前包括：`regress`、`iv`、`did`、`callaway_santanna`、`rdrobust`、`synth`）。
+
+### 4. 指南中的 `## For Agents` 区块
+
+修改已注册规范中的 Agent 原生字段后，请运行
+`python scripts/sync_agent_blocks.py`。`--check` 参数适用于 CI，并会在内容漂移时
+以非零状态退出。
+
+---
+
+## v1.4.x → v1.5.0
+
+这是次要版本，仅有一项变更需要迁移：
+
+### `sp.mr` 现在是分发器函数，不再是模块别名
+
+在 v1.5.0 之前，`sp.mr` 是 `statspai.mendelian` 子模块的别名，因此可以通过模块属性
+调用 `sp.mr.mr_ivw(...)`。
+
+从 v1.5.0 开始，`sp.mr` 成为 MR 方法家族的**统一分发器**，调用模式与
+`sp.synth` / `sp.decompose` / `sp.dml` 一致：
+
+```python
+sp.mr("ivw",   beta_exposure=bx, beta_outcome=by,
+       se_exposure=sx, se_outcome=sy)
+sp.mr("egger", beta_exposure=bx, beta_outcome=by,
+       se_exposure=sx, se_outcome=sy)
+sp.mr("mvmr",  snp_associations=snp_df,
+       outcome="beta_y", outcome_se="se_y",
+       exposures=["beta_bmi", "beta_ldl"])
+```
+
+| 旧用法（<= v1.4.2） | 新用法（>= v1.5.0） |
+| --- | --- |
+| `sp.mr.mr_ivw(...)` | `sp.mr_ivw(...)` (already available since v0.9) or `sp.mr("ivw", ...)` |
+| `sp.mr.mr_egger(...)` | `sp.mr_egger(...)` or `sp.mr("egger", ...)` |
+| `sp.mr.mr_presso(...)` | `sp.mr_presso(...)` or `sp.mr("presso", ...)` |
+| `sp.mr` (as module alias) | `sp.mendelian` (module access preserved under this name) |
+
+**简单判断：**如果代码使用 `sp.mr_*`（下划线形式），在 v1.5.0 中无需修改即可继续
+使用。只有不常见的 `sp.mr.<attribute>` 写法需要调整。
+
+### 升级后可能观察到的数值差异
+
+- `sp.mr_egger` / `sp.mendelian_randomization(..., methods=["egger"])`
+  斜率 p 值和置信区间现在使用 `t(n − 2)` 分布，而非正态分布，与
+  `sp.mr_pleiotropy_egger` 及 R 的 `MendelianRandomization` 软件包保持一致。
+  当 `n_snps ≥ ~100` 时差异几乎不可见；若 `n_snps` 很小（如 5 或 6），置信区间约
+  扩大 1.6 倍。
+- `sp.mr_presso` p-values now use the `(k + 1) / (B + 1)` MC convention,
+  因此 p 值严格大于零（下限为 `1 / (B + 1)`）。非极端情形不变；修复了
+  `log(p)` 后续计算中 `-inf` 的传播问题。
+
+---
+
+## 从 PyStataR 迁移至 StatsPAI
+
+`PyStataR` 已弃用。其所有功能现均可在 [StatsPAI](https://github.com/brycewang-stanford/StatsPAI)
+中通过统一的 `sp.*` 命名空间使用。
+
+```bash
+pip install statspai
+```
+
+```python
+import statspai as sp
+```
+
+## API 对照
+
+| PyStataR | StatsPAI |
+|---|---|
+| `pdtab.tab1(df, 'x')` / `tab2(df, 'x', 'y')` | `sp.tab(df, 'x')` / `sp.tab(df, 'x', 'y')` |
+| `pywinsor2.winsor2(df, ['x'], cuts=(1,99))` | `sp.winsor(df, ['x'], cuts=(1,99))` |
+| `pywinsor2.outlier_indicator(df, ['x'])` | `sp.outlier_indicator(df, ['x'])` |
+| `pyoutreg.outreg(models, 'out.xlsx')` | `sp.outreg2(models, filename='out.xlsx')` |
+| `pyegen.rowmean(df, ['x1','x2'])` | `sp.rowmean(df, ['x1','x2'])` |
+| `pyegen.rowtotal(df, ['x1','x2'])` | `sp.rowtotal(df, ['x1','x2'])` |
+| `pyegen.rowmax/rowmin(df, [...])` | `sp.rowmax(df, [...])` / `sp.rowmin(df, [...])` |
+| `pyegen.rowsd(df, [...])` | `sp.rowsd(df, [...])` |
+| `pyegen.rownonmiss(df, [...])` | `sp.rowcount(df, [...])` |
+| `pyegen.rank(df, 'x', by='g')` | `sp.rank(df, 'x', by='g')` |
+
+## 为什么迁移
+
+- **一个软件包，一个命名空间。** `sp.*` 涵盖 PyStataR 的全部功能，并增加 DID、
+  RD、合成控制、IV、匹配、DML、因果森林、元学习器等方法。
+- **持续维护。** PyStataR 已停止维护；新功能仅在 StatsPAI 中开发。
+- **命名更清晰。** 名称中不含 “Stata”；StatsPAI 是面向 Python 的工具包。
+
+## 问题反馈
+
+请在以下页面提交 issue：
+[StatsPAI/issues](https://github.com/brycewang-stanford/StatsPAI/issues).

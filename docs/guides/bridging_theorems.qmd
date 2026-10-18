@@ -1,0 +1,171 @@
+# 桥接定理——两个方法何时针对同一估计目标
+
+> **2025—2026 年的六项研究结果证明：在不同假设下，表面上不同的估计器对能够识别相同的因果量。**同时运行两种方法并进行比较，可将假设不确定性转化为可从数据中观察的诊断信息。
+
+桥接定理将两种常用因果推断方法联系起来，证明在识别假设成立时，它们针对的是**同一个**估计目标。在经验应用中，它们的点估计应当数值接近。因此，若结果不一致，就说明你的数据中至少有一个假设不成立。
+
+这可以看作经典“无内生性时 OLS = IV”合理性检查的延伸，但应用范围已扩展至 2020 年代前沿的 DiD、合成控制、福利最大化、协变量平衡以及近端/代理变量长期效应。
+
+`sp.bridge(kind=..., **kwargs)` 是统一分发器。它会运行两条路径，对两者之差进行一致性检验，并返回一个双重稳健合并估计；如果两条路径的差异超过抽样误差，还会给出警告。
+
+---
+
+## 六种桥接
+
+| `kind`          | 定理                                           | 参考文献                                                       |
+|-----------------|---------------------------------------------------|-----------------------------------------------------------------|
+| `did_sc`        | DiD ≡ 合成控制                           | Sun, Xie & Zhang, arXiv:2503.11375 (2025)                       |
+| `ewm_cate`      | EWM ≡ CATE 最大化策略                             | Kato, arXiv:2510.26723 (2025)                                   |
+| `cb_ipw`        | 协变量平衡 ≡ IPW ≡ DR                    | Słoczyński, Uysal & Wooldridge, arXiv:2310.18563 (2023)         |
+| `kink_rdd`      | 集中效应 ≡ Kink RDD 一阶展开         | Lu, Wang, Xie, arXiv:2404.09117 (2025)                          |
+| `dr_calib`      | 双重稳健 ≡ 结果模型与 Riesz 联合校准 | van der Laan, Luedtke & Carone, arXiv:2411.02771 (2024)         |
+| `surrogate_pci` | 长期代理指标 ≡ PCI                   | Imbens, Kallus, Mao & Wang, JRSS-B 87(2) 2025; arXiv:2202.07234 |
+
+每种桥接都可通过顶层接口 `sp.bridge(kind="..." ...)` 导入，也可使用
+`statspai.bridge.*` 中对应模块的函数。
+
+---
+
+## 如何阅读 `BridgeResult`
+
+```python
+>>> r = sp.bridge(kind="cb_ipw", data=df, y="y", treat="d",
+...               covariates=["x1", "x2", "x3"])
+>>> r.summary()
+```
+
+关键字段：
+
+- `estimate_a`、`estimate_b`——两条路径各自的点估计。
+- `se_a`、`se_b`——标准误。
+- `diff`、`diff_se`、`diff_p`——差值及正式检验
+  `H0: estimate_a - estimate_b = 0`。
+- `estimate_dr`、`se_dr`——按精度加权的合并估计；**一致性检验未拒绝原假设时**，建议采用该结果。
+- `path_a_name` / `path_b_name`——可读的方法名称。
+- `reference`——该桥接结果对应的引文。
+
+**经验法则**：若 `diff_p > 0.10`，可采用 DR 估计。若
+`diff_p < 0.05`，至少有一个识别假设被违反——在信任任一条路径之前，请检查详情字典（`r.detail`）中的方法专属诊断。
+
+---
+
+## 1. DiD ≡ 合成控制 — Shi-Athey (2025)
+
+研究结果：只要 (a) 经典 DiD 平行趋势假设**或** (b) 单位层面合成控制权重能够识别 ATT，**两种**方法就都能恢复同一个量。直观来说，DiD 加权的反事实是控制单位的一种特定凸组合（等权重），而 SC 则采用另一种凸组合；任何凸组合都是可接受的。
+
+```python
+r = sp.bridge(
+    kind="did_sc", data=df,
+    y="gdp", unit="state", time="year",
+    treated_unit="CA", treatment_time=1989,
+)
+print(f"DiD path   : {r.estimate_a:.3f} ± {r.se_a:.3f}")
+print(f"SC path    : {r.estimate_b:.3f} ± {r.se_b:.3f}")
+print(f"Agreement p: {r.diff_p:.3f}")
+print(f"DR estimate: {r.estimate_dr:.3f}")
+```
+
+**适用场景**：你有一个（或少数几个）在已知时间接受处理的单位，并希望在“处理前趋势看起来平行”和“供体池能很好匹配”这两种判断之间取得平衡。
+
+**结果不一致说明什么**：平行趋势和供体池匹配两者至少有一项不成立。请检查 SC 权重（`r.detail`），并对 DiD 残差进行处理前趋势安慰剂检验。
+
+---
+
+## 2. EWM ≡ CATE — Ferman et al. (2025)
+
+经验福利最大化（Kitagawa-Tetenov IPW 福利）与基于 CATE 插件的策略优化，在重叠性以及结果模型/倾向得分模型设定正确的条件下，能够识别同一个最优策略价值。
+
+```python
+r = sp.bridge(
+    kind="ewm_cate", data=df,
+    y="y", treat="d",
+    covariates=["x1", "x2", "x3"],
+)
+```
+
+**适用场景**：你的目标是学习处理分配规则，而不只是估计 ATE。同时运行两条路径，可以判断你的干扰参数模型是否内部一致。
+
+---
+
+## 3. 协变量平衡 ≡ IPW ≡ DR — Zhao-Percival (2025 v6)
+
+在约束设置恰当时，协变量平衡权重、直接逆倾向得分权重和增广 IPW（双重稳健）都会给出**相同的** ATE 点估计。不同之处在于有限样本效率以及对模型设定错误的敏感程度。
+
+```python
+r = sp.bridge(
+    kind="cb_ipw", data=df,
+    y="y", treat="d",
+    covariates=["x1", "x2", "x3"],
+)
+```
+
+**经验检验**：在 ATE 真值为 1.5、含 400 个观测值的合成 DGP 上，`cb_ipw` 在两条路径上分别得到 1.51 / 1.46，DR 估计为 1.48——两种估计器的结果相差不到一个标准误。
+
+---
+
+## 4. 集中效应 ≡ Kink RDD — Lu-Wang-Xie (2025)
+
+Saez (2010) 指出，在拐点观察到的集中现象可以识别行为弹性。Lu-Wang-Xie 证明，在标准光滑性条件下，Saez 集中效应估计器在数值上等于 Kink-RDD 斜率变化估计器的一阶展开。同时运行两者，可检验数据中的识别一阶条件是否成立。
+
+```python
+r = sp.bridge(
+    kind="kink_rdd", data=df,
+    y="hours_worked", running="taxable_income", cutoff=60_000,
+    polynomial=2,
+)
+```
+
+**差异的解释**：`estimate_a`（拐点处斜率变化）与 `estimate_b`（集中质量）之间差距较大，意味着拐点可能比一阶展开所能描述的更尖锐（需要高阶校正），或者集中密度受到优化摩擦的扭曲（反集中、税制缺口等）。
+
+---
+
+## 5. 通过校准实现双重稳健 — Zhang et al. (2025)
+
+AIPW、TMLE 和 DML 都依赖**两个**干扰参数拟合：结果模型（Y 对 A、X 的回归）和 Riesz 表示函数（此处为倾向得分或其倒数）。Zhang 等人指出，有限样本下的双重稳健性等价于对这两个拟合结果进行**联合校准**——可通过等距投影或自适应影响函数残差实现。
+
+```python
+r = sp.bridge(
+    kind="dr_calib", data=df,
+    y="y", treat="d",
+    covariates=["x1", "x2", "x3"],
+)
+```
+
+**为什么要这样做？**如果没有校准，两个看似合理的机器学习拟合结果可能产生方向相反的校准偏差，进而抵消 AIPW 的双重稳健保证。桥接报告会明确展示底层结果的一致性。
+
+---
+
+## 6. 长期代理指标 ≡ 近端因果推断 — Imbens-Kallus-Mao-Wang (2025)
+
+代理指标（Athey-Chetty-Imbens-Kang，NBER WP 26463，2019）使用短期测量值作为长期结果的代理。Imbens、Kallus、Mao 和 Wang 指出，在完备性条件下，代理指标估计目标与使用相同短期变量作为未观测混杂因素代理的近端因果推断（PCI）估计目标**完全相同**。
+
+```python
+r = sp.bridge(
+    kind="surrogate_pci", data=df,
+    long_term="revenue_24mo", short_term=["dau_90d", "retention_90d"],
+    treat="feature_flag", covariates=["pre_dau", "pre_purch"],
+)
+```
+
+**重要意义**：两种截然不同的识别论证会得到相同数值。如果结果一致，就可以信任长期外推；如果不一致，说明代理变量可能不完备（遗漏相关混杂因素）或选择不当（桥接函数无法识别）。
+
+---
+
+## 何时使用桥接方法
+
+1. **面向博士生/学术受众时**，在不同识别框架之间进行权衡——“我们报告 DR 合并估计；两条路径的结果一致。”
+2. **在政策报告中**，说明结论不受方法选择影响。
+3. **在内部 A/B 测试工具中**，通过跨路径差异发现干扰参数模型设定错误。
+4. **在复现研究中**，用替代路径对先前论文采用的单一路径进行压力测试。
+
+每种桥接方法都已接入 `sp.list_functions()`，因此 LLM 智能体可以搜索“doubly robust”（双重稳健）、“synthetic control”（合成控制）或“surrogate”（代理）等词来发现它们——各规范中的标签明确列出了这些交叉引用。
+
+```python
+sp.search_functions("bridge")   # all six + the dispatcher
+sp.describe_function("bridge")  # curated JSON schema
+```
+
+---
+
+*本指南适用于 StatsPAI v1.3 及以上版本；桥接模块
+`statspai.bridge` 已稳定，在 1.x 版本中不会出现破坏性 API 变更。*

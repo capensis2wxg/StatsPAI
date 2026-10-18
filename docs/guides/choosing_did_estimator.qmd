@@ -1,0 +1,199 @@
+# 如何选择 DID 估计器
+
+StatsPAI 提供 18 种 DID 变体。本指南采用决策树形式：从第一个问题开始，跳转到对应章节；获得建议后即可停止。每项建议均以已发表的研究文献为依据。
+
+## 0. 简要流程图
+
+```
+你的面板是否为错位处理（不同单位在不同时间接受处理）？
+  否  -> 经典 2×2 DID（sp.did）
+          +-> 可选稳健性分析：sp.honest_did、sp.drdid
+  是  -> 不同队列间的处理效应是否同质？
+          不确定 -> 使用 sp.bacon_decomposition 进行判断
+          是     -> 可以使用 TWFE；CS / SA / Wooldridge 也适用
+          否     -> 不要使用 TWFE。请参阅“错位处理 + 异质效应”
+```
+
+## 1. 两期、两组（“2x2 DID”）
+
+| 使用场景                                   | 推荐调用                                                |
+|--------------------------------------------|-----------------------------------------------------------------|
+| 标准两期两组面板            | `sp.did(df, y='y', treat='treated', time='t', post='post')`     |
+| 包含协变量，采用双重稳健方法             | `sp.drdid(df, y='y', d='d', post='post', covariates=[...])`    |
+| 重复截面（无面板匹配）    | `sp.drdid(..., panel=False)` 或 `sp.did(..., repeated_cs=True)` |
+| 单位×时间单元格级数据（DDD）         | `sp.ddd(df, y='y', t1='state', t2='age', t3='year', ...)`       |
+
+**2x2 DID 的最低可行稳健性检验套件：**
+```python
+r = sp.did(df, y='y', treat='treated', time='t', post='post')
+r.next_steps()                      # 针对当前模型的检查清单
+sp.honest_did(r, max_M=0.2)         # Rambachan-Roth 敏感性分析
+sp.pretrends_test(r)                # 处理前安慰剂检验
+```
+
+## 2. 分期处理
+
+分期处理是指不同单位在不同日历时间接受处理。在分期处理下，经典 TWFE：
+```python
+sp.panel(df, 'y ~ treat', entity='i', time='t', method='fe')
+```
+只要不同队列的处理效应存在异质性，就会产生偏差
+（Goodman-Bacon 2021；de Chaisemartin & D'Haultfoeuille 2020）。应先进行诊断：
+
+```python
+bacon = sp.bacon_decomposition(df, y='y', treat='treat',
+                               time='t', id='i')
+# 如果大部分权重来自“较早处理组 vs 较晚处理组”的比较，
+# 则 TWFE 会受到已处理单位充当对照组所带来的污染。
+```
+
+### 2a. 分期处理 + 同质效应
+
+此时使用 TWFE 没问题。但 CS / SA / Wooldridge 也都是无偏估计器，而且无需额外成本即可灵活进行事件研究，因此没有理由舍弃它们而选择 TWFE。
+
+### 2b. 分期处理 + 异质效应
+
+| 场景                                            | 选择                                                                                |
+|-----------------------------------------------------|-------------------------------------------------------------------------------------|
+| 需要组别-时间 ATT(g,t) 和事件研究          | `sp.callaway_santanna(df, y, g, t, i)`                                              |
+| 协变量较多                             | `sp.callaway_santanna(..., x=[...], estimator='dr')`                                |
+| Sun-Abraham 交互加权事件研究              | `sp.sun_abraham(df, y, g, t, i)`                                                    |
+| 插补法（无需 TWFE）                   | `sp.did_imputation(df, y, i, t, g)`                                                 |
+| 两阶段回归（事件研究 + 协变量交互项）   | `sp.gardner_did(df, y=..., group=..., time=..., first_treat=..., event_study=True)` |
+| 一次调用完成汇总 + 精度加权            | `sp.harvest_did(df, outcome=..., unit=..., time=..., cohort=...)`                   |
+| 双向 Mundlak / ETWFE                             | `sp.wooldridge_did(df, y, group, time, first_treat)`                                |
+| 仅包含始终处理组 + 从未处理组                 | `sp.stacked_did(df, y, g, t, i, event_window=6)`                                    |
+| 连续处理/剂量处理                         | `sp.continuous_did(df, y, d, t, i)`                                                 |
+| 变化-变化法（CIC，而非均值 DID）           | `sp.cic(df, y, g, t)`                                                               |
+| de Chaisemartin-D'Haultfoeuille                     | `sp.did_multiplegt(df, y, treat, g, t, i)`                                          |
+
+**不确定时的默认建议：`sp.callaway_santanna(..., estimator='dr')`。**
+双重稳健 CS 是现代“稳妥默认选项”——对于结果模型和倾向得分模型设定错误均具有鲁棒性，而且其聚合权重（`sp.aggte`）支持在简单、组别加权、日历时间加权和事件研究 ATT 之间切换，无需重新拟合。
+
+### 2c. 使用 TWFE 的事件研究（旧方法）
+
+如果你**必须**向审稿人提供 TWFE 事件研究：
+```python
+sp.event_study(df, y='y', d='d', t='t', i='i',
+               method='twfe',  # 朴素方法；错位处理时会打印警告
+               pretrend_test=True)
+```
+建议优先使用 `method='sun_abraham'`，或直接运行 `sp.sun_abraham`。
+
+## 3. 敏感性分析与稳健性检验
+
+为了获得可用于发表的 DID 结果，始终运行以下三步稳健性检验套件：
+
+```python
+# 1. 前趋势检验（处理前的系数是否接近零？）
+sp.pretrends_test(r, alpha=0.05)
+
+# 2. Honest DID（Rambachan-Roth）：因果结论能承受多大程度的前趋势偏离？
+hd = sp.honest_did(r, max_M=0.5, method='smoothness')
+
+# 3. 完整稳健性报告：汇总前趋势、安慰剂和逐一排除队列检验
+sp.robustness_report(r)
+```
+
+DID 论文中可选但强烈建议进行的检验：
+- `sp.bjs_pretrend_joint(r)`：Borusyak-Jaravel-Spiess 联合前趋势检验
+  （解决逐期滞后检验中的多重检验问题）。
+- `sp.bacon_decomposition`：显示哪些 2x2 比较推动了你的
+  TWFE 估计。
+
+## 4. 何时应完全避免 DID
+
+在以下情况下，DID 是**错误的**工具：
+
+1. **处理受到前趋势混杂：**使用匹配 DID
+   （`sp.drdid`）或合成控制（`sp.synth`）。
+2. **只有一个处理单位：**使用 `sp.synth` 或 `sp.causal_impact`。
+3. **处理是连续剂量，而非 0/1 的处理起始指标：**使用
+   `sp.continuous_did`；如果存在阈值，则使用 `sp.bunching`。
+4. **存在预期效应：**在 CS2021 中使用 `anticipation=h` 参数，将参考期提前。
+
+## 5. 阅读输出
+
+StatsPAI 中的所有 DID 估计器都返回 `CausalResult`。通用接口如下：
+
+```python
+r.estimate    # 主要估计目标的点估计（通常为 ATT）
+r.se          # 标准误（默认按单位聚类）
+r.ci          # 95% 置信区间的（下限，上限）元组
+r.tidy()      # 兼容 broom 的长格式表格：主结果、事件研究和组别-时间行
+r.glance()    # 单行模型摘要（nobs、前趋势 p 值等）
+r.plot()      # 自动选择事件研究图、轨迹图或系数图
+r.summary()   # 易读的结果摘要
+r.next_steps() # 按优先级排列的稳健性检查清单
+r.cite()      # 对应论文的 BibTeX 条目
+```
+
+<!-- AGENT-BLOCK-START: did locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 数据为面板数据或重复截面数据，并包含时间列
+- 2x2 设计的处理列为二元值（0/1）；分期设计的处理列为首次处理时期（整数）
+- 至少包含一个处理前时期（2x2 需 ≥ 2 个时期；事件研究建议 ≥ 3 个时期）
+- 对于分期设计：需要有用于标识跨时期单位的 id 列
+
+**识别假设**
+- 平行趋势：若无处理，处理组与对照组将沿相同轨迹变化
+- 无预期效应：处理前时期的结果不受未来处理影响
+- SUTVA：单位之间不存在溢出效应
+- 对于分期/异质效应：使用 CS 或 SA——TWFE 可能产生负权重（Goodman-Bacon）
+
+**失败模式 → 恢复措施**
+
+| 现象 | 异常 | 处理方法 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 前趋势联合检验 p < 0.05（或检验效能不足、阈值为 0.10） | `AssumptionViolation` | 使用 sp.sensitivity_rr（Rambachan & Roth 诚实置信区间），或切换到 sp.callaway_santanna。 | `sp.sensitivity_rr` |
+| 使用 TWFE 方法处理分期处理 | `AssumptionWarning` | TWFE 可能给出负权重；请改用 Callaway-Sant'Anna、Sun-Abraham 或 BJS 插补法。 | `sp.callaway_santanna` |
+| 前趋势检验效能不足（Roth 2022） | `AssumptionWarning` | 检查 sp.pretrends_power——如果效能较低，请使用 sp.sensitivity_rr 报告诚实置信区间。 | `sp.sensitivity_rr` |
+| 单位层面的聚类数较少 | `AssumptionWarning` | 使用野生聚类自助法（sp.wild_cluster_bootstrap）。 | `sp.wild_cluster_bootstrap` |
+
+**替代方法（按优先顺序）**
+- `sp.callaway_santanna`
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.synth`
+
+**典型最小 N**：50
+
+<!-- AGENT-BLOCK-END -->
+
+<!-- AGENT-BLOCK-START: callaway_santanna locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 面板数据，包含单位 × 时间 × 结果变量
+- g 列为整数：首次处理期；从未处理的单位取值为 0
+- 至少有一个从未处理或较晚处理的对照组
+- 每个队列至少有 ≥ 2 个处理前时期
+
+**识别假设**
+- 给定 X 的条件平行趋势（如果提供协变量）
+- 无预期效应（或通过 anticipation= 参数进行调整）
+- 重叠性：每个队列的倾向得分均为正
+- SUTVA
+
+**失败模式 → 恢复措施**
+
+| 现象 | 异常 | 处理方法 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 聚合后的 ATT(g,t) 前趋势检验拒绝原假设 | `AssumptionViolation` | 使用 sp.sensitivity_rr 计算诚实置信区间，或添加协变量以满足条件平行趋势。 | `sp.sensitivity_rr` |
+| 队列只有一个单位——变异不足 | `DataInsufficient` | 合并较小队列或将其删除；检查 sp.diagnose_result。 |  |
+| 所有单位都在同一时间接受处理（没有分期） | `MethodIncompatibility` | 改用 sp.did(method='2x2') 进行 2x2 DID。 | `sp.did` |
+
+**替代方法（按优先顺序）**
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.did`
+
+**典型最小 N**：50
+
+<!-- AGENT-BLOCK-END -->

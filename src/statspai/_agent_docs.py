@@ -22,8 +22,8 @@ The block layout is:
 
     **Typical minimum N**: 50
 
-Agents parse this; humans read it in MkDocs. A single agent card is
-the source of truth so the two never drift apart.
+Agents parse this; humans read it in the Quarto documentation site. A
+single agent card is the source of truth so the two never drift apart.
 """
 
 from __future__ import annotations

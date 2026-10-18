@@ -1,0 +1,228 @@
+# LLM 辅助因果发现——方法族指南
+
+> StatsPAI 中闭环式 LLM × CI 检验因果发现。将 LLM
+>“领域知识预言机”与基于约束的发现（PC）和数据驱动验证相结合，
+> 避免先验知识在不知不觉中凌驾于数据所揭示的事实之上。
+
+## 何时使用此方法族
+
+- 你掌握**变量名 + 描述级别**的领域知识，LLM 可以利用这些知识
+ （例如医学概念、业务流程、政治科学变量）。
+- 你拥有样本量充足的**观测数据**（经验法则：
+  `n >> p`，约 10 个变量时至少需要 200 行）。
+- 你需要结合 LLM 先验和数据证据来获得**逐边置信度**，
+  而不仅仅是一个估计得到的 DAG。
+
+如果你只有数据 → 直接使用 `sp.pc_algorithm`。如果你只有
+LLM 派生的知识而没有数据 → 使用 `sp.llm_dag_propose`。
+
+## 函数
+
+| 函数 | 用例 |
+|----------|----------|
+| `sp.llm_dag_propose` | 根据变量描述一次性提出 DAG（不进行数据验证）。 |
+| `sp.llm_dag_constrained` | **闭环流程**：提议 → 受约束 PC → CI 验证 → 降级 → 迭代。 |
+| `sp.llm_dag_validate` | 对任意已声明的 DAG 进行逐边 CI 检验审计。 |
+| `sp.pc_algorithm(..., forbidden=, required=)` | 将背景知识作为硬性边约束的受约束 PC。 |
+| `sp.causal_mas` | 多智能体 LLM 共识（提议者 / 批评者 / 领域专家）。 |
+| `sp.llm_causal_assess` | 对 LLM 的因果推理准确性进行基准评测。 |
+| `sp.pairwise_causal_benchmark` | 成对因果方向基准评测。 |
+
+## 决策树
+
+```
+是否有变量描述？
+├── 否  → sp.pc_algorithm（仅使用数据）或 sp.notears
+└── 是  → 是否有数据？
+         ├── 否  → sp.llm_dag_propose
+         └── 是  → sp.llm_dag_constrained   ← 推荐
+```
+
+## 快速入门：闭环流程
+
+```python
+import statspai as sp
+import pandas as pd
+
+# 具有领域描述的变量与观测数据
+df = pd.read_csv("clinical.csv")
+descriptions = {
+    "age": "患者年龄（年）",
+    "smoking": "吸烟状态（0/1）",
+    "lung_cancer": "肺癌诊断结果（0/1）",
+    "tar": "焦油沉积水平（微克）",
+}
+
+# 将你常用的 LLM 接入预言机。任何返回
+# [(parent, child, confidence), ...] 的可调用对象均可使用。
+# OpenAI / Anthropic / echo 客户端示例见 docs/guides/causal_mas.qmd。
+def oracle(variables, descriptions):
+    # 调用 LLM，并将结果解析为 (parent, child, confidence) 元组。
+    return your_llm_client.propose_edges(variables, descriptions)
+
+result = sp.llm_dag_constrained(
+    df,
+    variables=["age", "smoking", "lung_cancer", "tar"],
+    descriptions=descriptions,
+    oracle=oracle,
+    alpha=0.05,
+    max_iter=3,
+    high_conf_threshold=0.7,
+)
+
+print(result.summary())
+print(result.edge_confidence)  # 每条边的 LLM 评分与条件独立检验 p 值
+```
+
+## 闭环的工作方式
+
+```
+  ┌───────────────────┐
+  │ 预言机 / LLM 调用 │
+  └─────────┬─────────┘
+            ▼
+  ┌─────────────────────────────────┐
+  │ 分类：高置信度 → 必须保留边      │
+  │       低置信度 → 禁止边*         │
+  └─────────┬───────────────────────┘
+            ▼
+  ┌─────────────────────────────────┐
+  │ pc_algorithm(forbidden, required│
+  │ = 背景知识)                      │
+  └─────────┬───────────────────────┘
+            ▼
+  ┌─────────────────────────────────┐
+  │ 检验每条必需边 a → b：           │
+  │   偏相关条件独立检验             │
+  │   p > alpha → 降级               │
+  └─────────┬───────────────────────┘
+            ▼
+       是否有边被降级？
+       ├── 是 → 重新运行受约束 PC
+       └── 否 → 已收敛 ✓
+```
+
+默认情况下，`forbid_low_conf=False`；只有当预言机会明确给出
+非边声明时才启用此选项（大多数 LLM 只会返回正向边）。
+
+## 解读结果
+
+`LLMConstrainedDAGResult` 提供以下内容：
+
+| 字段 | 说明 |
+|-------|-------------------|
+| `final_edges` | 最终 CPDAG 中的有向边。 |
+| `edge_confidence` | DataFrame：`edge`、`llm_score`、`ci_pvalue`、`retained`、`source`。`source` 列用于区分 `required`（LLM 声明且数据支持）、`demoted`（LLM 声明但被数据否定）、`ci-test`（数据发现，未使用 LLM 输入）、`forbidden`（LLM 表示不应存在并被排除）。 |
+| `iteration_log` | 每次迭代的跟踪记录，包含各步骤中被降级的边。可用于发现振荡。 |
+| `converged` | 若最后一次迭代中没有边被降级，则为 True。 |
+| `to_dag()` | 转换为 `statspai.dag.DAG`，以便下游调用 `recommend_estimator`。 |
+
+## 与 StatsPAI 其他功能结合
+
+```python
+# 从闭环流程中获取经过验证的 DAG
+dag = result.to_dag()
+
+# 使用该 DAG 选择估计器
+rec = dag.recommend_estimator(exposure="smoking", outcome="lung_cancer")
+print(rec.summary())        # tells you whether backdoor / IV / frontdoor
+
+# 或直接传入 sp.causal()
+w = sp.causal(df, y="lung_cancer", treatment="smoking", dag=dag)
+w.report("analysis.html")
+```
+
+## 验证已有 DAG
+
+```python
+g = sp.dag("smoking -> lung_cancer; tar -> lung_cancer; age -> smoking")
+v = sp.llm_dag_validate(g, df, alpha=0.05)
+print(v.summary())
+# DAG Edge Validation
+# ============================================================
+#   Alpha            : 0.05
+#   Edges supported  : 2
+#   Edges unsupported: 1
+#     smoking -> lung_cancer  p=0.000  [OK]
+#     tar -> lung_cancer      p=0.000  [OK]
+#     age -> smoking          p=0.314  [REJECT]
+```
+
+`supported=True` 表示数据**没有**提供足以删除该边的证据
+（CI 检验未能拒绝）；`supported=False` 表示隐含的条件独立关系
+与数据一致——也就是说，这条边看起来是伪相关。
+
+## 面向智能体
+
+- **前置条件**：`variables` 中至少有 2 个与数据相交的数值列；`n_obs >> p`。
+- **常见故障**：ValueError "Variable X not in data.columns" → 仅传入数据中实际存在的列。
+- **未收敛时的恢复方法**（`converged=False`）：检查 `iteration_log` 中是否有边发生振荡；提高 `alpha`（放宽 CI 拒绝标准）或降低 `high_conf_threshold`（减少强制保留的边）。如果预言机给出的结果足够一致，不需要闭环流程，可改用 `sp.llm_dag_propose`。
+- **确定性**：使用确定性预言机（例如 `echo_client`）时，结果可逐位复现。
+- **成本**：每次迭代调用一次预言机；请据此安排预算。默认 `max_iter=3` 通常足够——常见情况下 1–2 次迭代即可收敛。
+
+## 注意事项
+
+1. **忠实性**——偏相关 CI 检验假设关系服从线性高斯分布。
+   对于非线性数据生成过程，请谨慎验证；未来版本将支持基于核的
+   CI 检验（HSIC）。
+2. **因果充分性**——PC 假设 `variables` 之间不存在未测量混杂因素。
+   如果怀疑存在潜在变量，请改用 `sp.fci`。
+3. **样本量**——样本量 `n` 较小时 CI 检验的功效较低，可能无法
+   拒绝任何边。为获得稳定结果，建议 `n >= 500`。
+4. **LLM 质量很重要**——如果预言机噪声较大、提出了许多伪边，
+   将触发大量降级，且可能无法在 `max_iter` 内收敛。请先使用
+   `sp.llm_causal_assess` 对预言机进行基准评测。
+
+## 参考文献
+
+- Spirtes, Glymour & Scheines (2000). *Causation, Prediction, and Search.*
+- Kıcıman, Ness, Sharma & Tan (2023). "Causal reasoning and large language models." [arXiv:2305.00050](https://arxiv.org/abs/2305.00050).
+- Long, Piché, Zantedeschi, Schuster & Drouin (2023). "Causal discovery with language models as imperfect experts." [arXiv:2307.02390](https://arxiv.org/abs/2307.02390).
+- Jiralerspong, Chen, More, Shah & Bengio (2024). "Efficient Causal Graph Discovery Using Large Language Models." [arXiv:2402.01207](https://arxiv.org/abs/2402.01207).
+
+<!-- AGENT-BLOCK-START: llm_dag_constrained locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 数据至少有 2 个与 `variables` 相交的数值列
+- n_obs 远大于变量数（当 p 接近 n 时，PC 不稳定）
+
+**识别假设**
+- 忠实性（PC 的 CI 检验反映 d-分离关系）
+- 因果充分性（`variables` 之间不存在未测量混杂因素）
+- 线性 / 高斯关系（Fisher-Z 偏相关）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| ValueError 'Variable X not in data.columns' | `ValueError` | 仅传入数据中存在的列名 |  |
+| 循环一直未收敛（达到 max_iter） | `None — returns converged=False` | 检查 iteration_log 中是否有边发生振荡；提高 alpha 或降低 high_conf_threshold | `sp.llm_dag_propose`（单次提议） |
+
+**替代方法（按优先级排序）**
+- `sp.llm_dag_propose`：不进行条件独立检验循环，直接生成 LLM 提议
+- `sp.pc_algorithm`：仅基于数据的 PC 算法（不使用 LLM）
+- `sp.causal_mas`：多智能体 LLM 共识
+
+**典型最小样本量 N**：200
+
+<!-- AGENT-BLOCK-END -->
+
+<!-- AGENT-BLOCK-START: llm_dag_validate locale=zh-CN -->
+
+## 面向智能体
+
+**识别假设**
+- 忠实性
+- 线性 / 高斯（Fisher-Z）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 很多边的 supported=False | `(none — informational)` | DAG 可能设定错误；重新运行发现，或检查是否存在非线性 / 未测量混杂因素 | `sp.llm_dag_constrained` |
+
+**典型最小样本量 N**：200
+
+<!-- AGENT-BLOCK-END -->

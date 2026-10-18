@@ -1,0 +1,195 @@
+# 从 R 迁移到 StatsPAI
+
+为从 R 因果推断生态系统转向 StatsPAI 的研究人员提供的一页式
+实用对照表。此处列出的每个 R 函数在 StatsPAI 中都有独立的
+Python 实现，遵循相同的统计方法，并通过统一的 `sp.*` API 提供。
+
+```python
+import statspai as sp
+```
+
+---
+
+## 回归与固定效应（`fixest`）
+
+| R (`fixest`)                              | StatsPAI                                                          | 说明                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
+| `feols(y ~ x1 + x2, data = df)`           | `sp.feols("y ~ x1 + x2", data=df)`                                | 基于 pyfixest；公式语法相同                         |
+| `feols(y ~ x \| firm + year, data = df)`  | `sp.feols("y ~ x \| firm + year", data=df)`                       | 双向固定效应                                        |
+| `fepois(y ~ x \| firm, data = df)`        | `sp.fepois("y ~ x \| firm", data=df)`                             | 用于引力模型的 HDFE Poisson / PPML                       |
+| `feglm(..., family = "binomial")`         | `sp.feglm(..., family="binomial")`                                | HDFE GLM                                                     |
+| `etable(m1, m2, m3)`                      | `sp.etable([m1, m2, m3])`                                         | 可用于发表的回归表（LaTeX / MD / HTML）    |
+| `vcov(m, cluster = ~firm)`                | `sp.feols` 中的 `vcov={"CRV1": "firm"}`                             | 群组稳健标准误                                            |
+| `fixef(m)`                                | `m.fixef()`（用于 pyfixest 结果）                                  | 提取固定效应估计值                               |
+
+对于不使用 HDFE 的普通 OLS，`sp.regress("y ~ x", data=df)` 提供
+与 statsmodels 兼容的接口，并返回 `CausalResult`。
+
+---
+
+## 分阶段 DID（`did`、`fixest::sunab`、`didimputation`、`DIDmultiplegt`）
+
+| R                                                       | StatsPAI                                                 |
+| ------------------------------------------------------- | -------------------------------------------------------- |
+| `did::att_gt(yname, tname, gname, idname, data)`        | `sp.callaway_santanna(data, y=, time=, first_treat=, group=)` |
+| `did::aggte(obj, type = "dynamic")`                     | `sp.aggte(cs_result, type="dynamic")`                    |
+| `did::aggte(obj, type = "group")`                       | `sp.aggte(cs_result, type="group")`                      |
+| `did::ggdid(agg)`                                       | `sp.ggdid(agg_result)`                                   |
+| `fixest::sunab(cohort, period)` 在 `feols` 中使用          | `sp.sun_abraham(data, y=, time=, first_treat=, group=)`  |
+| `didimputation::did_imputation(...)`                    | `sp.did_imputation(data, y=, time=, first_treat=, group=)` |
+| `DIDmultiplegt::did_multiplegt(...)`                    | `sp.did_multiplegt(data, y=, group=, time=, treatment=)` |
+| `DIDmultiplegt::did_multiplegt_dyn(...)`                | `sp.did_multiplegt(..., dynamic=True)`                   |
+| `bacondecomp::bacon(...)`                               | `sp.bacon_decomposition(data, y=, time=, treat=, id=)`   |
+| —                                                       | `sp.etwfe(...)`——Wooldridge (2021) 显式 API         |
+| `HonestDiD::createSensitivityResults(...)`              | `sp.honest_did(cs_result, Mbar=...)` / `sp.breakdown_m(...)` |
+| `HonestDiD::createSensitivityResults_relativeMagnitudes` | `sp.sensitivity_rr(cs_result, Mbar=...)`                 |
+| `pretrends::pretrends_power(...)`                       | `sp.pretrends_power(...)` / `sp.pretrends_test(...)`     |
+| —                                                       | `sp.stacked_did(...)`、`sp.ddd(...)`、`sp.continuous_did(...)`、`sp.cic(...)` |
+
+一键生成集成报告：
+
+```python
+report = sp.cs_report(data, y="y", time="t", first_treat="g", group="id",
+                      save_to="output/did_report")
+# 一次调用即可生成 .txt、.md、.tex、.xlsx 和 .png 文件
+```
+
+---
+
+## 回归不连续设计（`rdrobust`、`rddensity`、`rdmulti`、`rdhonest`）
+
+| R                                             | StatsPAI                                               |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `rdrobust::rdrobust(y, x, c = 0)`             | `sp.rdrobust(y, x, c=0)`                               |
+| `rdrobust::rdplot(y, x)`                      | `sp.rdplot(y, x)`                                      |
+| `rdrobust::rdbwselect(y, x)`                  | 带宽由 `sp.rdrobust(...)` 内部自动选择      |
+| `rddensity::rddensity(x, c = 0)`              | `sp.rdplotdensity(x, c=0)`                             |
+| `rdmulti::rdmc(...)`                          | `sp.rdmc(...)`                                         |
+| `rdmulti::rdms(...)`                          | `sp.rdms(...)`                                         |
+| `rdhonest::RDHonest(...)`                     | `sp.rd_honest(...)`（Armstrong-Kolesár 诚实置信区间）      |
+| —                                             | `sp.rkd(...)`——回归折点设计                |
+
+---
+
+## 合成控制（`Synth`、`gsynth`、`augsynth`、`synthdid`）
+
+| R                                            | StatsPAI                                     |
+| -------------------------------------------- | -------------------------------------------- |
+| `Synth::synth(...)`                          | `sp.synth(...)`                              |
+| `gsynth::gsynth(Y ~ D \| X, data)`           | `sp.gsynth(data, y=, treat=, unit=, time=)`  |
+| `augsynth::augsynth(...)`                    | `sp.augsynth(...)`                           |
+| `synthdid::synthdid_estimate(...)`           | `sp.sdid(...)`                               |
+| —                                            | `sp.staggered_synth(...)`——分阶段 SCM    |
+| —                                            | `sp.robust_synth(...)`——稳健 SCM          |
+
+---
+
+## 匹配与重加权（`MatchIt`、`ebal`、`cobalt`）
+
+| R                                        | StatsPAI                                            |
+| ---------------------------------------- | --------------------------------------------------- |
+| `MatchIt::matchit(..., method = "nearest")` | `sp.match(..., method="psm")`                    |
+| `MatchIt::matchit(..., method = "cem")`  | `sp.match(..., method="cem")`                       |
+| `MatchIt::matchit(..., method = "mahal")` | `sp.match(..., method="mahalanobis")`              |
+| `ebal::ebalance(...)`                    | `sp.ebalance(...)`                                  |
+| `cobalt::bal.tab(...)`                   | 内置于 `sp.match()` 输出中：`result.balance`    |
+
+---
+
+## 工具变量（`AER`、`ivmodel`、`ivreg`）
+
+| R                                              | StatsPAI                                              |
+| ---------------------------------------------- | ----------------------------------------------------- |
+| `AER::ivreg(y ~ x \| z, data = df)`            | `sp.ivreg("y ~ x", instruments=["z"], data=df)`       |
+| `ivmodel::LIML(...)`                           | `sp.liml(...)`                                        |
+| `ivmodel::JIVE(...)`                           | `sp.jive(...)`                                        |
+| `hdm::rlassoIV(...)`                           | `sp.lasso_iv(...)`                                    |
+| `ivmodel::AR.test(...)` / Stata `weakiv`       | `sp.anderson_rubin_test(...)`                         |
+| Stata `weakivtest`（Olea-Pflueger F）           | `sp.effective_f_test(..., vcov='HC1')`                |
+| Lee et al. (2022) tF                            | `sp.tF_critical_value(F)` + 2SLS t-ratio              |
+| `fixest::feols(y ~ 1 \| fe \| x ~ z)`          | `sp.feols("y ~ 1 \| fe \| x ~ z", data=df)`           |
+| `MendelianRandomization::mr_ivw(...)`          | `sp.mr_ivw(...)`                                      |
+| `MendelianRandomization::mr_egger(...)`        | `sp.mr_egger(...)`                                    |
+
+---
+
+## 机器学习因果推断
+
+| R                                            | StatsPAI                                            |
+| -------------------------------------------- | --------------------------------------------------- |
+| `DoubleML::DoubleMLPLR$new(...)`             | `sp.dml(..., model="plr")`                          |
+| `DoubleML::DoubleMLIRM$new(...)`             | `sp.dml(..., model="irm")`                          |
+| `grf::causal_forest(X, Y, W)`                | `sp.causal_forest(X, Y, W)`                         |
+| `grf::causal_forest(...)$predict(...)`       | `forest.predict(X_new)`                              |
+| `grf::instrumental_forest(...)`              | `sp.causal_forest(..., instrumental=True)`          |
+| `SuperLearner::SuperLearner(...)`            | 使用自定义学习器的 `sp.tmle(...)`                 |
+| `policytree::policy_tree(...)`               | `sp.policy_tree(X, reward)`                         |
+| `causalTree::honest.causalTree(...)`         | `sp.causal_forest(..., honest=True)`                |
+
+元学习器方法族（没有任何单一 R 软件包涵盖全部方法）：
+
+```python
+# 统一的一次调用 API：
+sp.metalearner(data, y="y", treat="D", covariates=["x1", "x2"], learner="S")
+sp.metalearner(data, ..., learner="T")
+sp.metalearner(data, ..., learner="X")
+sp.metalearner(data, ..., learner="R")
+sp.metalearner(data, ..., learner="DR")  # default
+
+# 如需更精细的控制，也可使用类 API：
+from statspai import SLearner, TLearner, XLearner, RLearner, DRLearner
+```
+
+---
+
+## 界限、保形推断、因果发现、策略
+
+| R                                      | StatsPAI                                            |
+| -------------------------------------- | --------------------------------------------------- |
+| `bounds::bounds(...)`（手动计算）         | `sp.manski_bounds(...)`、`sp.lee_bounds(...)`       |
+| `EValue::evalues.OR(...)`              | `sp.evalue(...)`                                    |
+| `pcalg::pc(suffStat, ...)`             | `sp.pc_algorithm(data)`                             |
+| `pcalg::fci(...)`                      | `sp.causal_discovery(data, method="fci")`           |
+| —（NOTEARS：历史上仅限 Python）  | `sp.notears(data)`                                  |
+| `policytree::policy_tree(...)`         | `sp.policy_tree(...)`                               |
+| —                                      | `sp.conformal_cate(...)`——保形 CATE           |
+
+---
+
+## 后估计、诊断、稳健性
+
+| R                                                | StatsPAI                                           |
+| ------------------------------------------------ | -------------------------------------------------- |
+| `modelsummary::modelsummary(list(m1, m2))`       | `sp.outreg2([m1, m2])` 或 `sp.modelsummary([m1, m2])` |
+| `sandwich::vcovCL(m, cluster = ~id)`             | `sp.feols` / `sp.regress` 中的 `vcov={"CRV1": "id"}` |
+| `lmtest::coeftest(m, vcov = vcovHC)`             | `result.robust()` / `result.summary(vcov="HC3")`   |
+| `car::linearHypothesis(m, "x1 = x2")`            | `result.test("x1 = x2")`                           |
+| `marginaleffects::avg_slopes(m)`                 | `result.marginal_effects()`                        |
+| `multiwayvcov::cluster.vcov(m, ~c1 + c2)`        | `vcov={"CRV1": ["c1", "c2"]}`                      |
+| `specr::specr(...)` / `spec_curve`               | `sp.spec_curve(...)`——原生实现       |
+
+---
+
+## StatsPAI 相比 R 的新增功能
+
+这些并非迁移项目，而是 **R 生态目前尚未以统一形式提供的新增功能**：
+
+- **`sp.list_functions()` / `sp.describe_function()` / `sp.function_schema()`**——面向智能体的 LLM 工作流自省功能
+- **`sp.interactive(fig)`**——Jupyter 所见即所得绘图编辑器，可导出可复现代码
+- **`sp.cs_report(..., save_to=...)`**——一键打包生成 txt + md + tex + xlsx + png
+- **跨所有 390 多个函数统一的 `CausalResult`**，提供 `.summary()`、`.plot()`、`.to_latex()`、`.cite()`
+- **sklearn Pipeline / JAX / PyTorch 集成**——原生支持神经因果模型
+
+---
+
+## 快速安装
+
+```bash
+pip install statspai
+# 可选的 HDFE 后端（用于大规模运行 sp.feols / sp.fepois）：
+pip install pyfixest
+```
+
+如果你发现此处遗漏了应该列出的 R 函数，请在
+[github.com/brycewang-stanford/statspai/issues](https://github.com/brycewang-stanford/statspai/issues)
+提交 issue。

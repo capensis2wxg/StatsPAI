@@ -1,0 +1,20 @@
+# 贡献者
+
+StatsPAI 由以下贡献者共同建设。每个合并的 pull request 都会在此列出，
+并记入项目 JOSS 论文的致谢部分。
+
+> 论文**作者身份**另行决定，由维护者酌情邀请。详见
+> [`CONTRIBUTING.qmd`](CONTRIBUTING.qmd) 中的“作者身份与致谢”部分。
+
+## 核心维护者
+
+- **Biaoyue (Bryce) Wang** ([@brycewang-stanford](https://github.com/brycewang-stanford)) — 项目负责人、架构设计及大多数估计器模块。
+
+## 社区贡献者
+
+<!--
+格式：- **姓名** ([@用户名](https://github.com/用户名)) — 贡献领域（例如“DID 模块”“文档”或“sp.rd 参考实现对照”）。
+新条目按用户名的字母顺序排列，并在 PR 合并时自动添加。
+-->
+
+_欢迎成为第一位社区贡献者！提交 PR 并合并后，您的名字就会出现在这里。_

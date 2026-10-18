@@ -7,5 +7,5 @@ explicitly update the pin in a commit, not let it slip.
 
 For the *underlying* claim that each replica's DGP is consistent
 with the published paper on the ORIGINAL data, see
-``tests/external_parity/PUBLISHED_REFERENCE_VALUES.md``.
+``tests/external_parity/PUBLISHED_REFERENCE_VALUES.qmd``.
 """

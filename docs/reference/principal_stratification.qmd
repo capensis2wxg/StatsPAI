@@ -1,0 +1,128 @@
+# 主分层
+
+Frangakis 与 Rubin（2002）提出的主分层方法根据**处理后**变量的联合潜在取值对个体分层，常见变量包括依从类型或生存状态；相应的**主因果效应（PCE）**以所属分层为条件。
+
+| 场景 | 处理后变量 `S` |
+| --- | --- |
+| 鼓励设计 / 不依从 | 实际接受处理 |
+| 生存 / 死亡截断 | 随访时是否存活 |
+| 培训后的就业 | 是否就业 |
+| 脱落 / 缺失机制 | 是否响应 |
+
+StatsPAI 通过 `sp.principal_strat(..., method=...)` 提供两种识别策略：
+
+1. **`'monotonicity'`** — Angrist-Imbens-Rubin（1996）+
+   Zhang-Rubin（2003）锐界限。
+2. **`'principal_score'`** — Ding 与 Lu（2017）的主分数加权（在主可忽略性假设下点识别）。
+
+此外，`sp.survivor_average_causal_effect(...)` 是针对经典死亡截断问题的便捷封装。
+
+---
+
+## 单调性方法 — 服从者 LATE 与 SACE 界限
+
+在 AIR 单调性假设下（`S(1) ≥ S(0)` 几乎处处成立，即不存在反向服从者），三个分层的混合比例可由观测数据分解得到：
+
+| 分层 | 比例 | 名称 |
+| --- | --- | --- |
+| `(S(0)=1, S(1)=1)` | `P(S=1 \| D=0)` | Always-taker / always-survivor |
+| `(S(0)=0, S(1)=1)` | `P(S=1 \| D=1) - P(S=1 \| D=0)` | Complier / harmed |
+| `(S(0)=0, S(1)=0)` | `P(S=0 \| D=1)` | Never-taker / never-survivor |
+
+**服从者 PCE（即 LATE）**可通过 Wald 型比率点识别；**始终生存者 SACE**具有 Zhang-Rubin 锐界限。
+
+```python
+res = sp.principal_strat(
+    df, y='wage', treat='treat', strata='employed',
+    method='monotonicity',
+    n_boot=500, seed=0,
+)
+
+res.strata_proportions         # dict: always / complier / never shares
+res.effects                    # DataFrame — LATE row with SE / CI / p-value
+res.bounds                     # DataFrame — SACE lower / upper bounds
+print(res.summary())           # pretty-printed
+```
+
+对于**E[Y(1) - Y(0) | 始终生存者]**，Zhang-Rubin 界限来自对
+(D=1, S=1) 单元进行最坏 / 最好情形切分。该单元由始终生存者
+（比例 `q = π_always / P(S=1|D=1)`）和服从者混合构成。当
+`π_always ≈ 0` 时，界限退化为 `NaN`（会明确标记）。
+
+---
+
+## 主分数方法 — 利用协变量进行点识别
+
+在**主可忽略性**假设下（给定 `X` 后，在 `D=d` 组内
+`Y(d) ⊥ 分层`）并满足单调性时，可由观测单元概率
+`p11(X) = P(S=1|D=1,X)` 和
+`p10(X) = P(S=1|D=0,X)`:
+
+```text
+e_always(X)   = p10(X)
+e_complier(X) = p11(X) - p10(X)
+e_never(X)    = 1 - p11(X)
+```
+
+随后可按协变量对观测单元加权分层，估计各层特定的 ATE（Ding 与 Lu，2017）。
+
+```python
+res = sp.principal_strat(
+    df, y='wage', treat='treat', strata='employed',
+    covariates=['age', 'edu', 'tenure'],
+    method='principal_score',
+    n_boot=500, seed=0,
+)
+res.effects                     # DataFrame: complier / always / never PCE
+```
+
+返回三个分层各自的点估计、自助法标准误、置信区间和 p 值。
+
+**单调性诊断**：若超过 5% 的个体满足拟合值 `p11(x) < p10(x)`，
+则会触发 `RuntimeWarning`，并在 `model_info` 中记录：
+
+```python
+res.model_info['mono_violation_frac']     # fraction with p11<p10
+res.model_info['mono_min_raw_complier']   # min(p11(x) - p10(x))
+```
+
+主可忽略性是一项强假设，发表结果前应结合敏感性分析。
+
+---
+
+## 生存者平均因果效应封装
+
+经典死亡截断问题（Zhang-Rubin，2003）：
+
+```python
+sace = sp.survivor_average_causal_effect(
+    df, y='qol_score', treat='treat', survival='alive',
+    alpha=0.05, n_boot=500, seed=0,
+)
+sace.model_info['sace_lower'], sace.model_info['sace_upper']
+sace.ci    # Imbens-Manski-style union confidence interval
+```
+
+返回 `CausalResult`，以锐界限中点作为点估计，并在 `model_info` 中记录界限端点。由于目标量是部分识别的，点零假设的 Wald 检验没有明确定义，因此 `pvalue` 为 `NaN`。
+
+---
+
+## 双层 IV / 鼓励设计
+
+当前版本**不支持**同时传入工具变量*和*实际接受处理变量；这种双层设定需要专门结合 `IV + 主分层` 的估计器。经典鼓励设计中的 AIR LATE 请使用 `sp.dml(model='iivm')`。向 `sp.principal_strat` 显式传入 `instrument=` 参数会引发 `NotImplementedError`。
+
+---
+
+## 参考文献
+
+- Frangakis, C.E. & Rubin, D.B. (2002). Principal stratification in
+  causal inference. *Biometrics*.
+- Zhang, J.L. & Rubin, D.B. (2003). Estimation of causal effects
+  via principal stratification when some outcomes are truncated by
+  "death". *JEBS*.
+- Angrist, J.D., Imbens, G.W. & Rubin, D.B. (1996). Identification
+  of causal effects using instrumental variables. *JASA*.
+- Ding, P. & Lu, J. (2017). Principal stratification analysis using
+  principal scores. *JRSS-B*.
+- Jo, B. & Stuart, E.A. (2009). On the use of propensity scores in
+  principal causal effect estimation. *Stat. Med.*

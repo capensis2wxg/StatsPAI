@@ -1,0 +1,173 @@
+# 因果 MAS——多智能体 LLM 因果发现
+
+> arXiv:2509.00987 (2025 年 9 月)：*Causal MAS — A Survey of Large
+> Language Model Architectures for Discovery and Effect Estimation.*
+
+## 1. 为什么采用多智能体？
+
+单提示词 LLM 因果发现流水线（Kiciman-Sharma 2025）很脆弱：一次模型运行只产生一个 DAG，而且没有审计轨迹来区分自信但错误的边和谨慎而正确的边。
+
+Causal MAS 对这种架构进行了改造：
+
+```
+  Proposer  ──► list of candidate edges
+  Critic    ──► rejects edges violating time-order / exclusion / DAG axioms
+  Domain    ──► endorses edges consistent with substantive knowledge
+  Synthesiser ─► accumulates per-edge votes over N rounds
+```
+
+经过 `N` 轮后，每条边都会获得 `[0, 1]` 区间内的置信度：即该边未被批评者拒绝的轮数占比，再加上每次领域专家认可贡献的半分。最终 DAG 会保留高于 `final_threshold` 的边。
+
+## 2. 快速入门（离线，无需 API 密钥）
+
+```python
+import statspai as sp
+
+res = sp.causal_llm.causal_mas(
+    variables=['age', 'sex', 'income', 'treatment', 'mortality'],
+    domain='observational mortality cohort',
+    rounds=3,
+    final_threshold=0.5,
+)
+print(res.summary())
+print(res.to_dag_string())
+```
+
+默认后端是 StatsPAI 内置的**确定性启发式方法**——它使用与
+`sp.causal_llm.llm_dag_propose` 相同的变量名模式匹配器。输出可复现，无需 API 密钥、无需联网，也没有意外行为。
+
+## 3. 接入真正的 LLM
+
+```python
+# 兼容 OpenAI API（默认模型 gpt-4o-mini，需设置 OPENAI_API_KEY）
+openai_cli = sp.causal_llm.openai_client(
+    model='gpt-4o-mini',
+    temperature=0.0,     # deterministic for reproducibility
+)
+
+# Anthropic（默认模型 claude-opus-4-7，需设置 ANTHROPIC_API_KEY）
+claude_cli = sp.causal_llm.anthropic_client(
+    model='claude-opus-4-7',
+    temperature=0.0,
+)
+
+res = sp.causal_llm.causal_mas(
+    variables=['age', 'sex', 'treatment', 'ldl', 'mi'],
+    domain='cardiovascular prevention in type-2 diabetes',
+    client=claude_cli,
+    rounds=4,
+)
+```
+
+两个客户端都公开 `LLMClient.chat(role, prompt) -> str` 接口，因此你可以将任何其他模型封装后传入：
+
+```python
+class MyClient(sp.causal_llm.LLMClient):
+    name = 'my-local-llm'
+    def chat(self, role, prompt):
+        return my_inference_server(role, prompt)  # whatever you have
+```
+
+## 4. Claude 扩展思考
+
+Claude 4.5 / Opus 4.7 支持扩展思考——模型会先在私有推理过程中使用可配置的 token 预算，然后再生成公开回答。对于因果发现，在含糊领域中这通常能提高边的准确率（Kiciman-Sharma 2025 §5）。
+
+```python
+claude_thinking = sp.causal_llm.anthropic_client(
+    model='claude-opus-4-7',
+    thinking_budget=4096,     # reasoning tokens
+    max_tokens=8192,          # total (must exceed thinking_budget)
+)
+res = sp.causal_llm.causal_mas(
+    variables=[...], client=claude_thinking, rounds=3,
+)
+
+# 查看私有推理轨迹以供审计：
+for entry in claude_thinking.history:
+    if 'thinking' in entry:
+        print(f"[{entry['role']}] thought for "
+              f"{len(entry['thinking'])} chars before answering.")
+```
+
+推理文本保存在 `client.history[-1]['thinking']` 中，**不会**包含在
+`causal_mas` 解析的公开回答里——因此 DAG 构建不会受思考文本影响，只会多出可选的审计能力。
+
+## 5. 辩论记录
+
+每次 MAS 运行都会生成完整的 `transcript`，便于审计：
+
+```python
+for entry in res.transcript[:8]:
+    print(f"[round={entry['round']}] {entry['agent']}:{entry['action']}: "
+          f"{entry['payload']}")
+```
+
+每轮包含四条记录：`propose`（提议者）、`reject`（批评者）、
+`endorse`（领域专家）和 `score`（综合器）。`score` 记录会保存不断更新的边计数映射，因此可以回放置信度的累积过程。
+
+## 6. 读取结果
+
+```python
+res.edges          # -> list[(parent, child)] surviving final_threshold
+res.confidence     # -> dict{edge -> float in [0, 1]}
+res.roles          # -> dict{variable -> 'treatment' | 'outcome' | 'confounder' | ...}
+res.transcript     # -> list of round-by-round debate events
+res.backend        # -> 'heuristic' | 'openai' | 'anthropic' | 'echo' | user's name
+res.to_dag_string()  # -> 'A -> B; C -> D' for sp.dag(...)
+```
+
+## 7. 将结果传入 `sp.dag` 进行识别
+
+```python
+dag_str = res.to_dag_string()
+dag = sp.dag(dag_str)
+
+# 识别 'treatment' 对 'mortality' 的因果效应：
+ident = sp.identify(dag, treatment='treatment', outcome='mortality')
+print(ident.summary())
+```
+
+如果 MAS 生成的 DAG 能识别该效应，`ident` 会包含一个调整集。如果 DAG 存在环或角色信息不完整，`identify` 调用会指出需要质疑哪些边——这通常说明批评者轮次拒绝的边还不够多。
+
+## 8. 角色覆盖与启发式分类
+
+启发式变量名分类器只能提供初始猜测。只要你掌握了更可靠的信息，就应覆盖其判断：
+
+```python
+res = sp.causal_llm.causal_mas(
+    variables=['A', 'B', 'C', 'D'],   # all opaque names
+    treatment='B',
+    outcome='D',
+    confounders=['A'],
+    instruments=['C'],
+    client=my_client,
+    rounds=3,
+)
+```
+
+显式 kwargs 始终优先于名称启发式判断。
+
+## 9. 与 StatsPAI 其他功能集成
+
+| 使用场景                                            | 流水线                                                         |
+|-----------------------------------------------------|------------------------------------------------------------------|
+| 提议 DAG、识别效应、估计并进行稳健性分析 | `causal_mas` → `sp.dag` → `sp.identify` → `sp.smart.recommend` → `sp.dml` |
+| 在未观测混杂下计算 E 值       | `causal_mas` → `sp.causal_llm.llm_unobserved_confounders` → `sp.evalue` |
+| 与领域 DAG 交叉核验                  | 将 `res.edges` 与专家 DAG 进行比较             |
+| 新数据到达时流式更新 DAG       | 每个批次运行 `causal_mas`，再通过 `sp.dag` 合并边的交集 |
+
+## 10. 不适用场景
+
+- **高风险临床或法律决策。**启发式后端不能替代领域专家对 DAG 的审查。应将输出视为需要审核的**提议**，而非真实情况。
+- **变量集非常大（≥ 50 个节点）。**token 预算和边提议的组合爆炸会降低质量；应先对变量聚类，或改用结构化 DAG 学习算法，例如 `sp.pcalg` 或 `sp.ges`。
+- **定量效应估计。**Causal MAS 只生成 DAG。若需估计效应大小，请将 DAG 传入 `sp.dml`、`sp.causal_forest`、`sp.metalearner` 等功能。
+
+## 11. 参考文献
+
+- arXiv:2509.00987 (2025/09)。
+  *Causal MAS: A Survey of Large Language Model Architectures for
+  Discovery and Effect Estimation.*
+- Wan, G., Lu, Y., Wu, Y., Hu, M. & Li, S. (2024)。
+  *Enhancing Causal Discovery with Large Language Models.* arXiv:2402.11068。
+- Anthropic (2025)。
+  *Extended Thinking in Claude 4.5 / Opus 4.7.* 技术报告。

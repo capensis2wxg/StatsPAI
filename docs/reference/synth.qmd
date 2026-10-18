@@ -1,0 +1,71 @@
+# 合成控制
+
+`statspai.synth` 是 Stata、R 和 Python 中覆盖面广泛的 SCM 工具集
+（v0.9.0，包含 20 种估计器、6 种推断策略和完整研究工作流）。
+
+## 统一分发器 — `sp.synth`
+
+```python
+r = sp.synth(
+    df, outcome='y', unit='state', time='year',
+    treated_unit='California', treatment_time=1989,
+    method='scm',           # 'scm' | 'sdid' | 'ascm' | 'bayesian' | 'bsts' |
+                            # 'penscm' | 'fdid' | 'cluster' | 'sparse' |
+                            # 'kernel' | 'kernel_ridge' | 'staggered' | …
+    placebo=True,           # 空间安慰剂检验
+    inference='placebo',    # 'placebo' | 'bootstrap' | 'jackknife' |
+                            # 'conformal' | 'posterior' | 'agnostic'
+)
+r.summary(); r.plot(); r.to_latex()
+```
+
+## 20 种估计器
+
+| 类别 | 估计器 | 参考文献 |
+| --- | --- | --- |
+| 经典方法 | `synth` | Abadie、Diamond 与 Hainmueller（2010，JASA） |
+| 双重稳健 | `sdid` | Arkhangelsky 等（2021，AER） |
+| 增强方法 | `ascm` | Ben-Michael、Feller 与 Rothstein（2021） |
+| 贝叶斯 | `bayesian_synth` | Dirichlet 先验 MCMC |
+| 状态空间 | `bsts_synth`, `causal_impact` | Brodersen 等（2015） |
+| 惩罚化方法 | `penscm` | Abadie 与 L'Hour（2021） |
+| 前向 DID | `fdid` | Li（2023） |
+| 聚类 | `cluster_synth` | 适用于大型供体池 |
+| 稀疏方法 | `sparse_synth` | 类 LASSO 的权重选择 |
+| 核方法 | `kernel_synth`, `kernel_ridge_synth` | Hazlett 与 Xu（2018） |
+| 错位实施 | `staggered_synth` | Ben-Michael 等（2022） |
+| 多结果 | `multi_outcome_synth` | Athey 等（2021） |
+| 矩阵补全 | `mc_synth` | Athey 等（2021，MC-NNM） |
+| 广义方法 | `gsynth` | Xu（2017，交互固定效应） |
+| 去均值方法 | `demeaned_synth` | Doudchenko 与 Imbens（2016） |
+| 分布方法 | `discos` | Gunsilius（2023） |
+
+## 研究工作流
+
+```python
+# 在同一数据上比较全部 20 种方法
+cmp = sp.synth_compare(df, ..., methods='all')
+cmp.plot_forest()                               # ATT + CI across methods
+
+# 根据拟合效果和敏感性自动选择
+rec = sp.synth_recommend(df, ...)
+rec.recommended_method, rec.reasons
+
+# 检验效能 / 最小可检测效应（MDE）
+p = sp.synth_power(df, ..., alphas=[0.05], effects=[1, 2, 3, 5])
+mde = sp.synth_mde(df, ..., alpha=0.05, power=0.80)
+
+# 敏感性分析：逐一剔除供体、时间安慰剂、处理前时期长度
+s = sp.synth_sensitivity(df, ..., n_boot=1000)
+
+# 报告
+sp.synth_report(rec, format='latex', save_to='report.tex')
+```
+
+## 标准数据集
+
+```python
+df = sp.california_tobacco()        # Abadie-Diamond-Hainmueller 2010
+df = sp.german_reunification()      # Abadie, Diamond & Hainmueller 2015
+df = sp.basque_terrorism()          # Abadie & Gardeazabal 2003
+```

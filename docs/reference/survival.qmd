@@ -1,0 +1,82 @@
+# 生存分析
+
+`statspai.survival` 提供 Kaplan-Meier、含时变协变量的 Cox 比例风险模型、加速失效时间（AFT）、脆弱性模型和竞争风险分析。
+
+## 非参数方法
+
+```python
+# Kaplan-Meier 生存曲线
+km = sp.kaplan_meier(df, time='t', event='d', group='arm')
+km.plot(ci=True, at_risk_table=True)
+km.median_survival
+
+# Nelson-Aalen 累积风险
+sp.nelson_aalen(df, time='t', event='d')
+
+# Log-rank 检验和分层 Log-rank 检验
+sp.log_rank_test(df, time='t', event='d', group='arm')
+sp.log_rank_test(..., strata='centre')
+```
+
+## Cox 比例风险模型
+
+```python
+r = sp.cox(
+    df, time='t', event='d',
+    x=['age','sex','treatment'],
+    strata='centre',
+    ties='efron',                    # or 'breslow' | 'exact'
+    vce='robust',                    # or 'cluster'
+    cluster='patient_id',
+)
+r.hazard_ratios()                    # HR + 95% CI
+r.proportional_hazards_test()        # Schoenfeld residuals test
+r.plot(kind='survival')              # adjusted survival curves
+r.predict_survival(new_df, times=[30, 60, 90])
+```
+
+### 时变协变量
+
+```python
+sp.cox(df, time_start='t0', time_stop='t1', event='d', x=[...])
+```
+
+## 加速失效时间模型
+
+```python
+sp.aft(df, time='t', event='d', x=[...],
+       dist='weibull')              # 'weibull' | 'exponential' | 'lognormal' | 'loglogistic' | 'gamma'
+```
+
+## 脆弱性模型
+
+```python
+sp.cox_frailty(df, time='t', event='d', x=[...],
+               cluster='family_id',
+               frailty_dist='gamma')     # shared gamma frailty
+sp.aft_frailty(df, ..., frailty_dist='log_normal')
+```
+
+## 竞争风险
+
+```python
+# Fine-Gray 亚分布风险
+sp.competing_risks(df, time='t', event='d_type',
+                   x=[...],
+                   event_of_interest=1,
+                   method='fine_gray')
+
+# 原因特异风险
+sp.competing_risks(..., method='cause_specific')
+```
+
+## 验证与诊断
+
+每个结果对象均提供：
+
+```python
+r.summary(); r.to_latex(); r.cite()
+r.schoenfeld()                       # 比例风险假设残差
+r.martingale()
+r.plot(kind='log_minus_log')         # 比例风险假设检查
+```

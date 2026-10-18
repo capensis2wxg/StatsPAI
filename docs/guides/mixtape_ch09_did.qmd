@@ -1,0 +1,324 @@
+# Mixtape 第 9 章——双重差分（StatsPAI 复现）
+
+本指南使用 StatsPAI 的因果分析工具箱，逐步复现 Cunningham 的
+《*Causal Inference: The Mixtape*》第 9 章（双重差分）。
+本指南旨在作为其他章节复现的**模板**——如果你要复现第 8 章
+（IV）或第 6 章（RD），可以沿用此结构并替换估计器。
+
+> **为什么要复现教科书内容？** 每个严肃的实证研究项目，
+> 成败都取决于*识别假设*，而不是代码。通过实践 Cunningham
+> 第 9 章，你可以看到 StatsPAI 如何一一对应到教学中的概念
+>（平行趋势、TWFE、分阶段处理、事件研究），而不是只面对
+> 一堆估计器。
+
+从头到尾运行本页代码大约需要 **30 秒**。
+
+---
+
+## 0. 设置
+
+```{python}
+#| label: mixtape-step-1
+#| eval: true
+import numpy as np
+import pandas as pd
+import statspai as sp
+
+# 本章中的结果均可复现：
+RNG_SEED = 2026
+```
+
+Mixtape 在示例中使用 *Kansas* 和 *Cheng-Hoekstra castle-doctrine*
+数据。这两组数据都未随 StatsPAI 一同提供，因此我们使用典型
+DGP 来复现其*教学模式*——面板数据中处理效应异质且分阶段发生：
+
+```{python}
+#| label: mixtape-step-2
+#| eval: true
+df = sp.dgp_did(
+    n_units=200, n_periods=10,
+    staggered=True, n_groups=4,
+    effect=0.5, heterogeneous=True,
+    seed=RNG_SEED,
+)
+df.head()
+# columns: unit, time, y, treated, first_treat, group
+```
+
+对于从未接受处理的单位，`first_treat` 为 NaN；其他单位取整数
+时期值——这是标准的 Callaway-Sant'Anna 约定。
+
+---
+
+## 1. TWFE 基准模型（以及为何异质性存在时它会出错）
+
+Mixtape 首先介绍经典的双向固定效应估计器：
+
+```{python}
+#| label: mixtape-step-3
+#| eval: true
+twfe = sp.panel(
+    df,
+    "y ~ treated",
+    entity="unit", time="time",
+    method="fe",
+    cluster="unit",
+)
+twfe.summary()
+```
+
+在效应同质时，这是经典的 DID。在**处理分阶段发生且效应存在
+异质性**时，Goodman-Bacon (2021) 指出，TWFE 系数是所有 2×2
+DID 比较的加权平均，*包括已处理单位充当对照组的比较*——
+因此某些权重可能为负。
+
+运行 Bacon 分解来观察这一点：
+
+```{python}
+#| label: mixtape-step-4
+#| eval: true
+bacon = sp.bacon_decomposition(
+    data=df, y="y", treat="treated",
+    time="time", id="unit",
+)
+sp.bacon_plot(bacon)
+```
+
+每个标注为“Later vs. earlier (treated)”的柱形，都是
+Goodman-Bacon 指出的病理性贡献。
+
+---
+
+## 2. 现代分阶段 DID 方法套件（CS / SA / BJS）
+
+自 2021 年以来，典型做法是并列报告**三种估计器**：
+Callaway-Sant'Anna（ATT 分解）、Sun-Abraham（加权事件研究）
+和 Borusyak-Jaravel-Spiess（插补）。StatsPAI 提供了一行调用的
+方法竞赛：
+
+```{python}
+#| label: mixtape-step-5
+#| eval: true
+race = sp.auto_did(
+    df, y="y", g="first_treat", t="time", i="unit",
+)
+print(race.summary())
+```
+
+它会打印：
+
+```text
+auto_did: staggered-DiD method race
+============================================================
+method  estimate  std_error  ci_lower  ci_upper  n_obs notes
+    CS    0.5092     0.0538    0.4037    0.6146   2000    ok
+    SA    0.4923     0.1091    0.2786    0.7061   2000    ok
+   BJS    0.5039     0.0240    0.4569    0.5509   2000    ok
+
+selected winner : bjs (rule=median)
+```
+
+三种方法的结果都与真实效应 (0.5) 相差不到 0.02。默认采用
+中位数胜出规则（`select_by='median'`）；传入 `select_by='cs'`
+（等选项）即可指定特定估计值作为主要结果。
+
+---
+
+## 3. 事件研究可视化（Sun-Abraham）
+
+Mixtape 强调，事件研究图是平行前趋势的**主要证据**。StatsPAI
+中的用法：
+
+```{python}
+#| label: mixtape-step-6
+#| eval: true
+sa = sp.sun_abraham(
+    data=df, y="y", g="first_treat", t="time", i="unit",
+    event_window=(-3, 3),
+)
+sp.enhanced_event_study_plot(sa)
+```
+
+处理前的系数应聚集在零附近；处理后的系数则应展示处理效应的
+动态路径。
+
+---
+
+## 4. 稳健性分析：Rambachan-Roth (2023) 敏感性检验
+
+如果平行趋势并不完全成立，该怎么办？Rambachan & Roth 的
+“诚实 DID”方法回答了结果在失去统计显著性之前能够容忍
+**多大程度**的趋势漂移。
+
+```{python}
+#| label: mixtape-step-7
+#| eval: true
+cs = sp.callaway_santanna(
+    data=df, y="y", g="first_treat", t="time", i="unit",
+)
+dyn = sp.aggte(cs, type="dynamic")
+
+# Breakdown value: largest allowable pre-trend drift per period
+m_star = sp.breakdown_m(dyn, e=0, method="smoothness")
+print(f"Breakdown M* = {m_star:.4f}")
+
+# Full sensitivity frame at several candidate M values
+sens = sp.honest_did(dyn, e=0, method="smoothness",
+                     m_grid=list(np.linspace(0, 0.5, 11)))
+sens.tail()
+```
+
+较大的 `M*` 表示效应能够经受较大的平行趋势违反——结果较为
+稳健。较小（或为零）的 `M*` 表示结论较为脆弱，应在论文中
+明确指出。
+
+---
+
+## 5. 多元分析 / 规格曲线
+
+Cunningham 的 Mixtape 在每个 DID 章节的结尾都会进行规格检验。
+StatsPAI 提供了**两种**互补的多元分析工具——根据你想改变的
+内容选择相应工具：
+
+### 5a. 改变*估计器*（CS 与 SA 与 BJS）
+
+这就是我们在第 2 节中用过的 `sp.auto_did`。排行榜本身就是
+多元分析——同一数据集使用三种识别策略，并列展示三个点估计。
+
+### 5b. 改变*控制变量集*——`sp.spec_curve`
+
+```{python}
+#| label: mixtape-step-8
+#| eval: true
+# 提取最后一期的横截面数据（spec_curve 需要每个单位仅一条观测，
+# 而非面板数据），用于协变量分析
+# multiverse on a post-treatment outcome.
+last = df[df["time"] == df["time"].max()]
+
+sc = sp.spec_curve(
+    data=last,
+    y="y",
+    x="treated",
+    controls=[["group"], ["group", "unit"]],  # list-of-list: each inner list is one spec
+)
+sc.plot()
+```
+
+每个控制变量集 × 标准误类型 ×（可选）样本子集的组合都会成为
+曲线上的一个点；如果整个曲线上的估计都很稳定，就说明结果
+主要由设计驱动，而不是由规格设定驱动。
+
+> **注意**——``spec_curve`` API 用于协变量 / 标准误多元分析，
+> 而非估计器多元分析。如果要比较 TWFE、CS 与 BJS，请使用上文
+> 的 ``auto_did``；如果要查看改变控制变量集时主要估计值如何
+> 变化，请使用本节的方法。
+
+---
+
+## 6. 后续章节
+
+- **第 6 章复现**——使用 `sp.rdrobust` 和 `sp.rd_honest` 进行
+  精确与模糊 RD（McCrary 操纵检验 + 稳健偏差校正）。
+- **第 8 章复现**——使用 `sp.ivreg` 进行 IV 分析，通过
+  `sp.anderson_rubin_ci` / `sp.conditional_lr_ci` 计算对弱 IV
+  稳健的置信区间，并使用 Lee-McCrary (2022) 的
+  `sp.tF_adjustment` 临界值。
+- **第 10 章复现**——使用 `sp.synth`、`sp.sdid` 和完整的供体池
+  诊断套件进行合成控制分析。
+
+每章都遵循相同模式：**(1) 经典基准模型 → (2) 现代方法竞赛 →
+(3) 事件研究可视化 → (4) 敏感性分析 → (5) 规格曲线**。
+
+---
+
+## 引用
+
+如果你在学术工作中使用本指南或 StatsPAI，请同时引用：
+
+```bibtex
+@book{cunningham2021causal,
+  title={Causal Inference: The Mixtape},
+  author={Cunningham, Scott},
+  year={2021},
+  publisher={Yale University Press},
+  url={https://mixtape.scunning.com/}
+}
+
+@software{statspai,
+  title={StatsPAI: The AI-powered Statistics & Econometrics Toolkit for Python},
+  author={Wang, Biaoyue},
+  year={2026},
+  url={https://github.com/brycewang-stanford/StatsPAI},
+  version={1.6.0}
+}
+```
+
+<!-- AGENT-BLOCK-START: did locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 数据是面板数据或带有时间列的重复截面数据
+- 2×2 设计中，处理列为二值（0/1）；分阶段设计中，该列为首次处理期（整数）
+- 至少有一个处理前时期（2×2 设计至少需要 2 个时期；事件研究建议至少 3 个时期）
+- 对于分阶段设计：需要标识跨时间单位的 id 列
+
+**识别假设**
+- 平行趋势：若没有处理，处理组与对照组本应遵循相同的变化轨迹
+- 无预期效应：处理前时期的结果不受未来处理影响
+- SUTVA：单位之间不存在溢出效应
+- 对于分阶段 / 效应异质的设计：使用 CS 或 SA——TWFE 可能产生负权重（Goodman-Bacon）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 前趋势联合检验 p < 0.05（或在 0.10 水平下功效不足） | `AssumptionViolation` | 使用 sp.sensitivity_rr（Rambachan & Roth 诚实置信区间），或改用 sp.callaway_santanna。 | `sp.sensitivity_rr` |
+| 处理时点分阶段发生，但使用 TWFE 方法 | `AssumptionWarning` | TWFE 可能产生负权重；请使用 Callaway-Sant'Anna、Sun-Abraham 或 BJS 插补。 | `sp.callaway_santanna` |
+| 前趋势检验功效不足（Roth 2022） | `AssumptionWarning` | 检查 sp.pretrends_power——如果功效低，通过 sp.sensitivity_rr 报告诚实置信区间。 | `sp.sensitivity_rr` |
+| 单位层面的群组数量较少 | `AssumptionWarning` | 使用野生群组自助法（sp.wild_cluster_bootstrap）。 | `sp.wild_cluster_bootstrap` |
+
+**替代方法（按优先级排序）**
+- `sp.callaway_santanna`
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.synth`
+
+**典型最小样本量 N**：50
+
+<!-- AGENT-BLOCK-END -->
+
+<!-- AGENT-BLOCK-START: callaway_santanna locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 包含单位 × 时间 × 结果的面板数据
+- g 列是整数：首次处理时期，或从未处理时取 0
+- 至少有一个从未处理或较晚处理的对照组
+- 每个队列至少有 2 个处理前时期
+
+**识别假设**
+- 给定 X 的条件平行趋势（如果提供协变量）
+- 无预期效应（或通过 anticipation= 进行调整）
+- 重叠性：每个队列的倾向概率均为正
+- SUTVA
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 聚合 ATT(g,t) 的前趋势检验未通过 | `AssumptionViolation` | 使用 sp.sensitivity_rr 计算诚实置信区间，或添加协变量以满足条件平行趋势。 | `sp.sensitivity_rr` |
+| 某队列仅有一个单位——变异不足 | `DataInsufficient` | 合并较小的队列或将其剔除；检查 sp.diagnose_result。 |  |
+| 所有单位都在同一时间接受处理（没有分阶段处理） | `MethodIncompatibility` | 改用 2×2 DID：sp.did(method='2x2')。 | `sp.did` |
+
+**替代方法（按优先级排序）**
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.did`
+
+**典型最小样本量 N**：50
+
+<!-- AGENT-BLOCK-END -->

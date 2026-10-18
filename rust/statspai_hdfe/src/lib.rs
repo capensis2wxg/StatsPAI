@@ -7,7 +7,7 @@
 //! Rayon.
 //!
 //! Target wheel matrix (see docs/superpowers/specs/
-//! 2026-04-20-v095-rust-hdfe-spike.md):
+//! 2026-04-20-v095-rust-hdfe-spike.qmd):
 //! - macOS arm64, macOS x86_64
 //! - manylinux_2_17 x86_64, aarch64
 //! - musllinux_1_2 x86_64

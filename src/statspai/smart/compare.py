@@ -150,7 +150,7 @@ def compare_estimators(
              'msm':      {'time_varying': ['L_lag']},
              'principal_strat': {'strata': 's'}}
 
-        **Collision rule** (docs/ROADMAP.md §6): per-method hints
+        **Collision rule** (docs/ROADMAP.qmd §6): per-method hints
         take precedence over the shared kwargs for the method they
         name. If the top-level ``covariates=['age']`` disagrees with
         ``method_hints={'proximal': {'covariates': ['age', 'educ']}}``,

@@ -1,0 +1,44 @@
+# StatsPAI 性能基准测试
+
+本目录用于测量 StatsPAI 在典型工作负载下的实际运行时间，并在可行时与其他
+Python 计量经济学库进行比较。
+
+## 运行方法
+
+快速运行（样本量 n 最大约 1 万，耗时数秒）：
+
+```bash
+python3 benchmarks/run_all.py --quick
+```
+
+完整运行（样本量最大 50 万；耗时约 5–15 分钟）：
+
+```bash
+python3 benchmarks/run_all.py --full
+```
+
+结果写入 ``benchmarks/RESULTS.qmd`` 和
+``benchmarks/results.json``。
+
+## 测量内容
+
+| 文件 | 基准测试 | 可用时的比较库 |
+| --- | --- | --- |
+| ``bench_regression.py`` | ``sp.regress`` scaling | statsmodels OLS |
+| ``bench_hdfe.py`` | ``sp.absorb_ols`` HDFE | linearmodels PanelOLS, dummy-variable OLS |
+| ``bench_did.py`` | ``sp.callaway_santanna`` | (StatsPAI only — no comparable Python package) |
+| ``bench_rd.py`` | ``sp.rdrobust`` | (StatsPAI only) |
+| ``bench_matching.py`` | ``sp.ebalance``, ``sp.cbps`` | (StatsPAI only) |
+
+比较库采用延迟导入；如果未安装，基准测试会仅显示 StatsPAI 的数据，并注明缺少
+比较库。
+
+## 为什么基准测试不放在 tests/ 中
+
+- 运行需要数分钟（``pytest tests/`` 应保持快速）。
+- 基准测试测量的是速度，而非正确性；基于耗时断言容易在共享 CI 运行器上产生不稳定结果。
+- 结果供 CHANGELOG / README 使用，而非 CI 使用。
+
+## 当前主要结果
+
+运行后请查看 ``RESULTS.qmd``，或主 README / CHANGELOG 中的“基准测试”部分。

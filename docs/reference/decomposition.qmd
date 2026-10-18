@@ -1,0 +1,66 @@
+# 分解分析
+
+`statspai.decomposition` 在 13 个模块中提供 18 种分解方法 （v0.9.2，约 6,200 行代码，54 项测试）。这是 Python 中覆盖范围广泛的分解工具集，包含均值、分布、不平等、人口统计和因果分解。
+
+## 统一分发器：`sp.decompose`
+
+``` python
+r = sp.decompose(
+    method='ffl',                 # 支持 30 个别名
+    data=df, y='log_wage', group='female',
+    x=['education', 'experience'],
+    stat='quantile', tau=0.5,
+    inference='analytical',       # 'analytical' | 'bootstrap' | 'none'
+)
+r.summary(); r.plot(); r.to_latex()
+```
+
+## 均值分解
+
+| 函数 | 方法 / 文献 |
+|------------------------------------|------------------------------------|
+| `sp.oaxaca(df, ...)` | Blinder-Oaxaca 三部分分解，支持 5 种参考系数（Blinder 1973、Oaxaca 1973、Neumark 1988、Cotton 1988、Reimers 1983） |
+| `sp.gelbach(df, ...)` | 序贯正交分解（Gelbach 2016，JoLE） |
+| `sp.fairlie(df, ...)` | 非线性 Logit / Probit 分解（Fairlie 1999、2005） |
+| `sp.bauer_sinning(df, ...)` / `sp.yun_nonlinear(df, ...)` | 细分非线性分解（Bauer-Sinning 2008；Yun 2004/05） |
+
+## 分布分解
+
+| 函数 | 方法 / 文献 |
+|------------------------------------|------------------------------------|
+| `sp.rifreg(df, ...)` / `sp.rif_decomposition(...)` | RIF 回归与 OB 分解（Firpo-Fortin-Lemieux 2009，*Econometrica*） |
+| `sp.ffl_decompose(df, ...)` | FFL 两步细分分解（2018） |
+| `sp.dfl_decompose(df, ...)` | 反事实重加权（DiNardo-Fortin-Lemieux 1996） |
+| `sp.machado_mata(df, ...)` | 基于模拟的 QR 分解（MM 2005） |
+| `sp.melly_decompose(df, ...)` | 解析 QR 分解（Melly 2005） |
+| `sp.cfm_decompose(df, ...)` | 分布回归（Chernozhukov-Fernández-Val-Melly 2013） |
+
+## 不平等分解
+
+| 函数 | 方法 / 文献 |
+|------------------------------------|------------------------------------|
+| `sp.subgroup_decompose(df, ...)` | Theil T/L、GE(α)、Dagum Gini（1997）、Atkinson 和 CV² 的组间 / 组内分解（Shorrocks 1984） |
+| `sp.shapley_inequality(df, ...)` | 将不平等 Shorrocks-Shapley 分配至协变量（Shorrocks 2013） |
+| `sp.source_decompose(df, ...)` | Gini 来源分解（Lerman-Yitzhaki 1985） |
+
+## 人口统计标准化
+
+| 函数                             | 方法 / 文献                      |
+|----------------------------------|----------------------------------|
+| `sp.kitagawa_decompose(df, ...)` | 双因素率分解（Kitagawa 1955）    |
+| `sp.das_gupta(df_a, df_b, ...)`  | 多因素对称分解（Das Gupta 1993） |
+
+## 因果分解
+
+| 函数 | 方法 / 文献 |
+|------------------------------------|------------------------------------|
+| `sp.gap_closing(df, method=...)` | 差距缩小估计器（Lundberg 2021），支持回归 / IPW / AIPW |
+| `sp.mediation_decompose(df, ...)` | 自然直接效应 / 间接效应（VanderWeele 2014） |
+| `sp.disparity_decompose(df, ...)` | 因果差异分解（Jackson-VanderWeele 2018） |
+
+## 实现与验证标准
+
+- Theil T、Theil L 和 Atkinson 指数使用闭式影响函数（不回退到 O(n²) 数值计算）。
+- 使用排序 ECDF 的成对 MAD 恒等式，以 O(n log n) 计算加权 Dagum Gini。
+- 跨方法一致性测试：`test_dfl_ffl_mean_agree`、 `test_mm_melly_cfm_aligned_reference`、 `test_dfl_mm_reference_convention_opposite`。
+- 数值恒等式检查：FFL 四部分之和，以及加权 Gini 的 RIF $E_w[\text{RIF}] = G$。

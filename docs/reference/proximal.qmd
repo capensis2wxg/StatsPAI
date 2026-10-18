@@ -1,0 +1,99 @@
+# 近端因果推断
+
+Tchetgen Tchetgen 等人（2020）提出的方法，利用未观测混杂因素的两个代理变量，在存在**未测量混杂因素**时识别 ATE：
+
+* **`Z`** —“处理诱导型混杂代理变量”：
+  `Z ⊥ Y | (D, U, X)`.
+* **`W`** —“结果诱导型混杂代理变量”：
+  `W ⊥ D | (U, X)`.
+
+以及已测量协变量 `X`。
+
+```text
+       ┌── Z ──► D ──► Y ──┐
+       │                   │
+       U ───────────────── U     (U 未观测)
+       │                   │
+       └────── W ──────────┘
+```
+
+## `sp.proximal(...)` — 基于结果桥接函数的线性 2SLS
+
+假设结果桥接函数为线性形式：:math:`h(W, D, X) = \gamma_0 +
+\gamma_D D + \gamma_W^\top W + \gamma_X^\top X`。在此限制下，桥接方程可化简为标准 2SLS 问题，
+其中 `W` 是内生变量，`Z` 是其工具变量。
+
+```python
+# 未观测的 U 会使 OLS 产生偏误；借助 (Z, W) 可恢复识别。
+r = sp.proximal(
+    df, y='lung_cancer', treat='smoker',
+    proxy_z=['occupation'],             # 处理侧代理（W 的工具变量）
+    proxy_w=['shs_exposure'],           # 结果侧代理（内生变量）
+    covariates=['age', 'sex'],          # 外生控制变量
+    bridge='linear',                    # 当前唯一支持的选项
+)
+
+r.estimate                              # γ_D — 线性桥接函数下的 ATE
+r.model_info['first_stage_F']           # 弱工具变量诊断（仅 k_w==1）
+r.model_info['bridge']                  # 'linear' — 记录供审计
+```
+
+## 推断选项
+
+* **闭式标准误**（默认）：2SLS 夹心估计，假设同方差。
+  `r.model_info['se_method'] == '2sls_sandwich'`.
+* **自助法标准误**：传入 `n_boot=500` 即可启用。失败会被记录并发出警告，不会静默回退。
+
+```python
+r = sp.proximal(df, y='y', treat='d',
+                proxy_z=['z'], proxy_w=['w'],
+                n_boot=500, seed=0)
+r.model_info['se_method']             # 'bootstrap'
+r.model_info['n_boot_failed']         # 正常运行时为 0
+```
+
+## 弱工具变量诊断
+
+当只有一个内生代理变量（`k_w == 1`）时，StatsPAI 会报告在控制 `X` 后，以排除型 `Z` 回归 `W` 的第一阶段 F 统计量。当 F < 10 时会发出警告。
+
+```python
+if r.model_info['first_stage_F'] is not None:
+    print(f"第一阶段 F 统计量：{r.model_info['first_stage_F']:.2f}")
+```
+
+对于多个内生代理变量（`k_w > 1`），正确的诊断量是 **Cragg-Donald / Kleibergen-Paap 最小特征值**统计量。目前尚未实现，因此 `first_stage_F` 为 `None`，并会发出 `RuntimeWarning` 说明原因。参阅 `docs/ROADMAP.qmd` §2。
+
+## 类 API
+
+```python
+from statspai import ProximalCausalInference
+
+obj = ProximalCausalInference(
+    y='y', treat='d', proxy_z=['z'], proxy_w=['w'],
+    covariates=['x'],
+).fit(df)
+r = obj.result_            # CausalResult
+```
+
+## 非线性桥接函数
+
+核方法桥接函数（Mastouri 等，2021）以及 sieve / RKHS 方法（Deaner，2018）已列入路线图，但尚未发布。
+`bridge='kernel'` and `bridge='sieve'` currently raise
+`NotImplementedError`，并提示参阅 `docs/ROADMAP.qmd` §1。
+
+框架代码位于 `statspai.proximal.p2sls`。有意实现非线性桥接函数的贡献者可从此处开始。
+
+## 参考文献
+
+- Tchetgen Tchetgen, E.J., Ying, A., Cui, Y., Shi, X. and Miao, W.
+  (2020). An Introduction to Proximal Causal Learning.
+  *arXiv:2009.10982*。
+- Miao, W., Geng, Z. and Tchetgen Tchetgen, E.J. (2018). Identifying
+  causal effects with proxy variables of an unmeasured confounder.
+  *Biometrika* 105(4)。
+- Cui, Y., Pu, H., Shi, X., Miao, W. and Tchetgen Tchetgen, E.J.
+  (2024). Semiparametric proximal causal inference. *JASA*。
+- Mastouri, A. et al. (2021). Proximal Causal Learning with Kernels.
+  *ICML*。（核桥接函数 — 未来工作）
+- Deaner, B. (2018). Proxy Controls and Panel Data.
+  *arXiv:1810.00283*。（sieve 桥接函数 — 未来工作）

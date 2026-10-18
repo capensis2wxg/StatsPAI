@@ -1,0 +1,100 @@
+# 双重 / 去偏机器学习
+
+`statspai.dml` 实现 Chernozhukov 等人（2018）的双重 / 去偏机器学习，
+使用交叉拟合估计干扰参数，并采用 Neyman 正交得分。
+
+## 四种模型类型
+
+```python
+# 部分线性回归（PLR）：Y = Dθ + g(X) + U，E[U|D,X]=0
+r = sp.dml(df, y='wage', treat='training',
+           covariates=['age','edu','exp'],
+           model='plr',
+           ml_g='rf', ml_m='rf',         # 干扰参数学习器
+           n_folds=5, n_rep=1)
+
+# 交互回归模型（IRM）：二元处理，Y = g₀(D,X) + U
+r = sp.dml(df, y='y', treat='d_bin', covariates=[...],
+           model='irm', trim=0.01)
+
+# 部分线性工具变量模型（PLIV）— v0.9.3 新增
+# Y = Dθ + g(X) + U, D = m(X) + V, Z = r(X) + ε
+r = sp.dml(df, y='y', treat='d', covariates=[...],
+           instrument='z',
+           model='pliv',
+           ml_g='rf', ml_m='rf', ml_r='rf')
+
+# 交互工具变量模型（IIVM）— v0.9.6 新增
+# 使用两个 Neyman 正交双重稳健得分的 Wald 比率估计二元 D、二元 Z 下的服从者 LATE。参见 Chernozhukov 等（2018）§5。
+r = sp.dml(df, y='earnings', treat='college',
+           covariates=['age', 'ability', 'parent_edu'],
+           model='iivm', instrument='lottery_win')
+r.estimand    # 'LATE'
+```
+
+::: {.callout-note}
+## 多个排除型工具变量
+
+StatsPAI 的 PLIV 和 IIVM 实现使用**单个标量**工具变量。若问题包含多个排除型工具变量，可使用
+`sp.scalar_iv_projection(data, treat, instruments=[...], covariates=[...])`
+并将生成的列名传入 `instrument=`。原生支持多个工具变量的计划详见
+[路线图 §2](../ROADMAP.qmd)。
+:::
+
+## 各模型的专用类
+
+每种模型也提供专用类，便于需要精细控制或扩展基类基础设施的用户使用：
+
+```python
+from statspai.dml import DoubleMLPLR, DoubleMLIRM, DoubleMLPLIV, DoubleMLIIVM
+
+r = DoubleMLIIVM(data=df, y='y', treat='d', covariates=[...],
+                 instrument='z').fit()
+```
+
+四种模型均共用 `statspai.dml._DoubleMLBase`，负责交叉拟合、按模型选择默认学习器（分类器或回归器）、重复划分聚合，以及构造 `CausalResult`。
+
+## 学习器
+
+可以传入内置学习器名称（`'rf'`、`'lasso'`、`'elastic_net'`、`'xgb'`、`'nn'`），
+也可以传入任何兼容 sklearn 接口的估计器：
+
+```python
+from sklearn.ensemble import GradientBoostingRegressor
+r = sp.dml(..., ml_g=GradientBoostingRegressor(n_estimators=200),
+                ml_m=GradientBoostingRegressor(n_estimators=200))
+```
+
+## 交叉拟合
+
+```python
+r = sp.dml(..., n_folds=5, n_rep=10)
+```
+
+当 `n_rep > 1` 时，StatsPAI 会使用不同的随机折叠分配重复交叉拟合，并报告**中位数**点估计以及 Chernozhukov 等（2018，式 3.7）的聚合标准误：
+
+```text
+σ̂² = median_r ( se_r² + (θ̂_r − θ̂_med)² )
+```
+
+该标准误同时考虑每次重复中的干扰参数方差和重复之间点估计的离散程度。若只取 `median(se_r)`，当折叠随机性影响点估计时，置信区间覆盖率会不足。
+
+## 结果属性
+
+```python
+r.coef                 # θ̂ 点估计
+r.se                   # 影响函数标准误
+r.ci(alpha=0.05)       # 置信区间
+r.influence_function   # 每个观测值的得分
+r.summary()            # 含参考文献的完整表格
+r.cite()               # Chernozhukov 等人（2018）的 BibTeX
+```
+
+## 参考文献
+
+- Chernozhukov, V. et al. (2018). Double/debiased machine learning for
+  treatment and structural parameters. *The Econometrics Journal* 21(1).
+- Chernozhukov, V. 等（2018，§4.2）。部分线性工具变量模型及
+  `model='pliv'` 使用的 Neyman 正交得分。
+- Chernozhukov, V. 等（2018，§5）。交互工具变量模型及
+  `model='iivm'` 使用的得分比率 LATE 估计器。

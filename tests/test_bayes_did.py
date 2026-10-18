@@ -1,6 +1,6 @@
 """Tests for ``sp.bayes_did`` — Bayesian difference-in-differences.
 
-Spec: docs/superpowers/specs/2026-04-20-v095-bayes-optuna-rust-spike.md
+Spec: docs/superpowers/specs/2026-04-20-v095-bayes-optuna-rust-spike.qmd
 """
 from __future__ import annotations
 

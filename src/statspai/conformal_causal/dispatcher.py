@@ -128,7 +128,7 @@ def conformal(kind: str = "cate", /, **kwargs: Any) -> Any:
 
     See Also
     --------
-    docs/guides/conformal_family.md : the full family guide.
+    docs/guides/conformal_family.qmd : the full family guide.
     """
     if kind not in _REGISTRY:
         raise ValueError(

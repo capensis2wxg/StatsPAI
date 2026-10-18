@@ -1,0 +1,162 @@
+# StatsPAI — 生态与代码统计
+
+> 本页以*证据为依据*，追踪 StatsPAI 的规模及其相对于更广泛统计软件生态的覆盖范围。标记为**“实测”**的数据可在标准安装环境中复现；标记为**“估算”**的数据根据公开生态统计数据推算，并说明了推算依据。
+>
+> *最近测量：2026-04-21，macOS arm64；对比 `statspai` 0.9.16、`statsmodels` 0.14.x、最新版 `linearmodels`、Stata 18 和 R 4.5.2。*
+
+------------------------------------------------------------------------
+
+## 1 · 跨生态代码行数
+
+| 生态 / 项目 | 统计方式 | 文件数 | 代码行数 | 主要领域 |
+|-------------------|------------|-----------:|-----------:|------------------|
+| **StatsPAI** `src/statspai/` | 实测 | 528 | **188,244** | 完整因果推断工具链 |
+| StatsPAI 测试（`tests/`） | 实测 | 255 | 42,768 | — |
+| statsmodels 0.14.x | 实测 | 948 | **381,981** | GLM / 时间序列 / 通用统计 |
+| linearmodels | 实测 | 131 | 36,607 | 面板 / IV |
+| **Python 因果推断小计** |  | 1,079 | **418,588** |  |
+| Stata 18 — 官方 `.ado` | 实测 | 3,767 | 937,543 | 封闭核心之上的命令层 |
+| Stata 18 — 官方 `.mata` | 实测 | 411 | 103,822 | Mata 数值计算层 |
+| **Stata 官方可执行代码** | 实测 | 4,178 | **1,041,365** | （另有 738,543 行 `.sthlp` 帮助文本，不计入代码） |
+| Stata SSC（第三方） | 估算 | 约 3,500 个包 | **200万–400万** | 社区扩展；本地样本（reghdfe、winsor2 等 50 个包）为 33,296 行 |
+| R 基础解释器（C + R + Fortran） | 估算 | — | 约 150 万 | 语言本身 |
+| R 基础库（73 个推荐包） | 实测 | 509 | 62,321 | 本机 R 安装附带 |
+| CRAN（2026 年约 22,000 个包） | 估算 | — | **8,000万–1.2亿**（仅 R；含 C/C++/Fortran 则超过 2 亿） | R 包主要生态 |
+| Bioconductor（约 2,300 个包） | 估算 | — | 3,000万–5,000万 | 生物信息学 |
+| **R 生态总计** | 估算 | — | **约 1.5 亿以上** |  |
+
+**如何理解此表**
+
+单独比较代码行数意义有限；更重要的是目标领域内的**覆盖密度**。StatsPAI 专注于因果推断和应用计量经济学，并不试图匹敌 R 的 1.5 亿多行代码，因为 CRAN 中约 90% 属于生物信息学、可视化、文本挖掘和通用机器学习，不在本项目范围内。更有参考意义的是下文第 §3 节的覆盖矩阵。
+
+------------------------------------------------------------------------
+
+## 2 · StatsPAI 各模块明细
+
+按代码行数排序。所有数据均在上方时间戳所示的提交中对 `src/statspai/` 实测。
+
+| 模块 | 代码行数 | 文件数 | 已注册函数（`sp.*`） | 主要领域 |
+|-------------|------------:|------------:|-----------------:|------------------|
+| `synth` | 17,428 | 30 | 50 | 合成控制方法家族 |
+| `did` | 13,926 | 28 | 53 | DID 与事件研究 |
+| `rd` | 11,169 | 21 | 47 | 回归不连续设计 |
+| `regression` | 10,597 | 18 | 36 | OLS / GLM / Logit / Probit |
+| `decomposition` | 5,828 | 16 | 29 | Oaxaca / RIF / 不平等分解 |
+| `diagnostics` | 5,372 | 12 | 20 | 假设检验 |
+| `output` | 5,072 | 8 | 14 | Word / Excel / LaTeX / HTML 输出 |
+| `smart` | 5,028 | 10 | 19 | 工作流编排 |
+| `plots` | 4,925 | 6 | — | 交互式绘图编辑器 |
+| `iv` | 4,815 | 15 | 4 | 2SLS / LIML / GMM / Kernel IV |
+| `panel` | 4,511 | 12 | 17 | 固定效应 / 随机效应 / Arellano-Bond |
+| `inference` | 4,446 | 14 | 22 | 标准误 / 自助法 / 野生自助法 |
+| `frontier` | 3,951 | 8 | 12 | SFA / xtfrontier |
+| `bayes` | 3,823 | 10 | 17 | 贝叶斯因果分析（PyMC） |
+| `multilevel` | 3,719 | 8 | 11 | melogit / mepoisson / ICC |
+| `spatial` | 3,566 | 29 | 35 | 空间权重 → ESDA → GWR → 面板 |
+| `matching` | 3,491 | 9 | 21 | 倾向得分 / CEM / 最优匹配 |
+| `core` | 3,050 | 6 | — | `CausalResult` 与基础设施 |
+| `dag` | 2,921 | 9 | 19 | DAG 推断 |
+| `causal_discovery` | 2,818 | 10 | 20 | NOTEARS / PC / LiNGAM / GES |
+| `metalearners` | 2,406 | 7 | 21 | S/T/X/R/DR 学习器 |
+| `robustness` | 2,243 | 6 | — | 设定曲线 / 敏感性分析 |
+| `bounds` | 2,216 | 5 | — | Manski / Lee 界限 |
+| `mendelian` | 2,041 | 6 | 28 | MR-IVW / Egger / PRESSO |
+| `timeseries` | 1,981 | 9 | 18 | BVAR / GARCH / 局部投影 |
+| `survival` | 1,884 | 5 | 8 | Cox / AFT / 脆弱性模型 |
+| `tmle` | 1,857 | 6 | 9 | TMLE / HAL-TMLE |
+| `conformal_causal` | 1,846 | 9 | 19 | 保形 ITE / CATE |
+| `interference` | 1,795 | 10 | 18 | 溢出效应 / 网络 |
+| `neural_causal` | 1,751 | 4 | — | TARNet / CFRNet / DragonNet |
+| `causal` | 1,712 | 5 | 6 | 通用因果分析工具 |
+| `proximal` | 1,463 | 8 | — | 近端因果推断家族 |
+| `qte` | 1,406 | 6 | 12 | 分位数 / 分布处理效应 |
+| `bcf` | 1,252 | 5 | 5 | 贝叶斯因果森林 |
+| `bunching` | 1,171 | 5 | 8 | 聚集估计器 |
+| `dml` | 1,104 | 8 | 8 | 双重 / 去偏机器学习 |
+| `mediation` | 973 | 4 | 4 | 中介分析与 E 值 |
+| `causal_rl` | 749 | 5 | 9 | 因果强化学习 |
+| `deepiv` | 737 | 2 | — | Deep IV / KAN-DeepIV |
+| `policy_learning` | 712 | 3 | 2 | policy_tree / policy_value |
+| `matrix_completion` | 359 | 2 | — | 面板数据矩阵补全 |
+| *（其他 38 个模块）* | 约 43K | 约 100 | 约 100 | 数据集、工具、兼容性等 |
+| **总计** | **188,244** | **528** | **889** |  |
+
+`iv`、`neural_causal`、`proximal`、`deepiv`、`matrix_completion`、`robustness` 和 `bounds` 的大部分功能通过**分发器**（如 `sp.iv(...)`、`sp.robustness_report(...)`）和 `_core.py` 中的共享内核提供；已注册函数数量仅统计顶层命名入口，不代表内部算法数量。
+
+------------------------------------------------------------------------
+
+## 3 · 因果推断覆盖矩阵（完整）
+
+图例：🏆 在各生态中覆盖最完整 · ✅ 完整支持 · ⚠️ 部分支持 / 分散 / 单一算法 · ❌ 不支持。
+
+“Stata”=官方命令及主要 SSC 包；“R”=CRAN；“sm+lm”=statsmodels + linearmodels。
+
+| \# | 方法家族 | Stata | R | sm+lm | DoubleML | **StatsPAI** | StatsPAI 入口 |
+|-----:|--------------------------------|:----:|:----:|:----:|:----:|:----:|------|
+| 1 | 双重差分 — 错位实施（CS / SA / BJS / dCdH / Gardner / Wooldridge ET）+ 事件研究 + 诚实置信区间（Rambachan-Roth） | ⚠️ | ✅ | ❌ | ❌ | 🏆 | `sp.callaway_santanna`, `sp.sun_abraham`, `sp.borusyak_jaravel_spiess`, `sp.dchd`, `sp.gardner_did`, `sp.wooldridge_did`, `sp.honest_did`, `sp.cs_report` |
+| 2 | 工具变量 — 经典方法（2SLS / LIML / GMM）+ 现代方法（Kernel IV / Deep IV / KAN-DeepIV） | ✅ 仅经典 | ✅ 仅经典 | ⚠️ 经典（lm） | ⚠️ | 🏆 | `sp.ivreg`, `sp.kernel_iv`, `sp.deep_iv`, `sp.kan_deepiv` |
+| 3 | 回归不连续设计 — CCT 锐断点 / 模糊断点 / 折点 + 二维 / 边界 + 多断点 + 诚实区间 + ML-CATE（18+ 估计器） | ⚠️ (`rdrobust` SSC) | ✅ (`rdrobust`) | ❌ | ❌ | 🏆 | `sp.rdrobust`, `sp.rd2d`, `sp.rdhte`, `sp.rd_forest`, `sp.rd_boost`, `sp.rdrandinf`, `sp.rdpower`, `sp.rdsummary` |
+| 4 | 合成控制（ADH / ASCM / gsynth / BSTS / 贝叶斯 / PenSCM / FDID — 20 种方法 + 6 种推断策略） | ⚠️ (`synth` SSC) | ⚠️（7 个包：Synth、gsynth、CausalImpact、MSCMT 等） | ❌ | ❌ | 🏆 | `sp.synth(method=...)`, `sp.synth_compare`, `sp.synth_recommend`, `sp.synth_power`, `sp.synth_sensitivity` |
+| 5 | 匹配 — 倾向得分 / CEM / 最优 / 基数 / 一对多 | ⚠️ (`psmatch2` SSC) | ✅ (`MatchIt`, `optmatch`) | ❌ | ❌ | ✅ | `sp.match`, `sp.cem`, `sp.optimal_match`, `sp.cardinality_match` |
+| 6 | 双重 / 去偏机器学习 | ❌ | ✅ (`DoubleML`) | ❌ | ✅ | ✅ | `sp.dml(model=...)`, `sp.dml_model_averaging`, `sp.kernel_dml` |
+| 7 | 元学习器（S/T/X/R/DR）+ 因果森林 / GRF | ❌ | ✅ (`grf`, `rlearner`) | ❌ | ❌ | ✅ | `sp.s_learner`, `sp.t_learner`, `sp.x_learner`, `sp.r_learner`, `sp.dr_learner`, `sp.causal_forest` |
+| 8 | TMLE / HAL-TMLE | ❌ | ✅ (`tmle`, `hal9001`) | ❌ | ❌ | ✅ | `sp.tmle`, `sp.hal_tmle`, `sp.ctmle` |
+| 9 | 神经因果模型（TARNet / CFRNet / DragonNet / CEVAE） | ❌ | ❌ | ❌ | ❌ | 🏆 | `sp.tarnet`, `sp.cfrnet`, `sp.dragonnet`, `sp.cevae` |
+| 10 | 因果发现（NOTEARS / PC / LiNGAM / GES + 深度学习变体） | ❌ | ⚠️ (`pcalg`) | ❌ | ❌ | 🏆 | `sp.notears`, `sp.pc_algorithm`, `sp.lingam`, `sp.ges` |
+| 11 | 近端因果推断（fortified / 双向 / MTP / 双重负向对照 / 替代终点） | ❌ | ⚠️（`pci` 功能分散） | ❌ | ❌ | 🏆 | `sp.proximal`, `sp.fortified_pci`, `sp.bidirectional_pci`, `sp.pci_mtp`, `sp.double_negative_control` |
+| 12 | 分位数处理效应 / 分布处理效应 / CiC / 分布 IV / 超越平均 LATE / 高维面板 | ⚠️ (`ivqreg`) | ⚠️ (`qte`, `Counterfactual`) | ❌ | ❌ | ✅ | `sp.qte`, `sp.qdid`, `sp.cic`, `sp.distributional_te`, `sp.dist_iv` |
+| 13 | 孟德尔随机化（IVW / Egger / 中位数 / 众数 / MR-PRESSO / MVMR / BMA） | ❌ | ✅ (`MendelianRandomization`, `TwoSampleMR`) | ❌ | ❌ | ✅ | `sp.mr_ivw`, `sp.mr_egger`, `sp.mr_median`, `sp.mr_presso`, `sp.mvmr`, `sp.mr_bma` |
+| 14 | 保形因果推断（ITE / CATE / 密度 / 剂量—反应 / 聚类 / 公平性） | ❌ | ❌ | ❌ | ❌ | 🏆 | `sp.conformal_ite`, `sp.conformal_cate`, `sp.conformal_dose_response` |
+| 15 | 贝叶斯因果推断（BCF / 有序 BCF / 因子暴露 BCF） | ❌ | ⚠️ (`bcf`) | ❌ | ❌ | ✅ | `sp.bcf`, `sp.bcf_ordinal`, `sp.bcf_factor_exposure` |
+| 16 | 空间计量经济学（权重 → ESDA → ML/GMM → GWR/MGWR → 面板） | ❌ | ⚠️（5 个包：spdep、spatialreg、sphet、splm、GWmodel） | ❌ | ❌ | 🏆 | 38 个函数，包括 `sp.sem`、`sp.sar`、`sp.gwr`、`sp.mgwr`、`sp.splm` |
+| 17 | 策略学习 / 离线策略评估（OPE） | ❌ | ⚠️ (`policytree`) | ❌ | ❌ | ✅ | `sp.policy_tree`, `sp.policy_value`, `sp.doubly_robust_ope` |
+| 18 | 聚集分析估计 | ⚠️ (`bunching` SSC) | ❌ | ❌ | ❌ | ✅ | `sp.bunching`, `sp.kink_bunching` |
+| 19 | 干扰效应 / 溢出效应（部分 / 网络 / 集群 RCT / 异质性） | ❌ | ⚠️ (`interference`) | ❌ | ❌ | 🏆 | 18 个函数，包括 `sp.spillover`、`sp.cluster_rct`、`sp.hte_interference` |
+| 20 | 面板数据矩阵补全 | ❌ | ⚠️ (`gsynth`) | ❌ | ❌ | ✅ | `sp.matrix_completion` |
+| 21 | 因果多智能体系统（多智能体 LLM 因果发现 — arXiv:2509.00987） | ❌ | ❌ | ❌ | ❌ | 🏆 | `sp.causal_mas`, `sp.causal_llm.openai_client`, `sp.causal_llm.anthropic_client` |
+| 22 | 论文发表表格（Word / Excel / LaTeX / HTML / Markdown） | ⚠️ (`outreg2`) | ⚠️ (`modelsummary`) | ⚠️ | ❌ | 🏆 | 所有估计器：`.to_word()` / `.to_excel()` / `.to_latex()` / `.to_html()` |
+| 23 | Agent 原生工具调用 schema（`function_schema()`） | ❌ | ❌ | ❌ | ❌ | 🏆 | `sp.list_functions()`、`sp.describe_function()`、`sp.function_schema()`、`sp.agent.mcp_server` |
+
+------------------------------------------------------------------------
+
+## 4 · 如何复现这些数据
+
+``` bash
+# StatsPAI (Python)
+find src/statspai -name '*.py' -exec wc -l {} + | tail -1
+find tests        -name '*.py' -exec wc -l {} + | tail -1
+python3 -c "import statspai as sp; print(len(sp.list_functions()))"
+
+# statsmodels + linearmodels
+python3 -c "import statsmodels, os; print(os.path.dirname(statsmodels.__file__))"
+python3 -c "import linearmodels, os; print(os.path.dirname(linearmodels.__file__))"
+find $(python3 -c "import statsmodels,os;print(os.path.dirname(statsmodels.__file__))") -name '*.py' -exec wc -l {} + | tail -1
+find $(python3 -c "import linearmodels,os;print(os.path.dirname(linearmodels.__file__))") -name '*.py' -exec wc -l {} + | tail -1
+
+# Stata (macOS default install path)
+find /Applications/Stata/ado/base -name '*.ado'  | xargs wc -l | tail -1
+find /Applications/Stata/ado/base -name '*.mata' | xargs wc -l | tail -1
+
+# R (installed library only; base-interpreter source requires R-<version>.tar.gz)
+find /Library/Frameworks/R.framework/Resources/library \( -name '*.R' -o -name '*.r' \) -exec wc -l {} + | tail -1
+```
+
+**生态整体估算**（SSC / CRAN / Bioconductor 总量）参考来源：
+
+- SSC — [Boston College Statistical Software Components archive](https://ideas.repec.org/s/boc/bocode.html) 中的软件包列表。
+- CRAN — [METACRAN](https://www.r-pkg.org/) 和 [CRAN by topic](https://cran.r-project.org/web/views/) 主题视图。
+- Bioconductor — [Bioconductor 3.20 发布统计](https://bioconductor.org/news/)。
+
+用于外推的 SSC 样本为本地安装的 52 个文件（`/Users/brycewang/Library/Application Support/Stata/ado/plus`，共 33,296 行代码，包含 `reghdfe`、`winsor2` 等）。
+
+------------------------------------------------------------------------
+
+## 5 · 为什么不以“代码行数领先”作为宣传重点
+
+单纯比较代码行数会误导对 StatsPAI 的判断，主要有三个原因：
+
+1.  **虚荣指标**：188K 与 R 的 1.5 亿多行代码之比，*无法说明*每行代码具备多少能力。R 的 CRAN 约 90% 属于范围外领域（生物信息学、可视化、文本、通用机器学习），两者并不可直接比较。
+2.  **动态变化**：CRAN 和 statsmodels 每月都在增长。若未通过 CI 重新生成，README 中的概览数字每季度都会过时。
+3.  **比较维度不当**：StatsPAI 的差异化优势是*在单一 API 中深入覆盖因果推断*，参见 §3。我们领先的许多领域在 Stata / R / statsmodels 中完全没有对应能力，而不是单纯“代码更少”。
+
+§3 的覆盖矩阵才是客观的定位依据。§1 的代码行数仅用于佐证“这些能力确实有代码实现”，而非用作竞争性宣传。

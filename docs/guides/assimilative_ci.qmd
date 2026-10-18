@@ -1,0 +1,137 @@
+# 同化因果推断
+
+> *Nature Communications* 2026：将贝叶斯数据同化 （天气预报、海洋学）与流式因果推断相结合。
+
+## 1. 它解决什么问题？
+
+大多数因果推断流水线都假设数据一次性到齐。 但在 A/B 测试、药物警戒和政策评估中，通常是**一次到达一个批次**， 而且处理效应本身可能随季节、用户群体或政策制度而变化。
+
+同化因果推断将因果效应视为随时间变化的潜在状态，并在每个新批次到达时 更新其后验分布——这与天气模型融合卫星观测以估计全球大气状态所用的数学方法完全相同。
+
+## 2. 状态空间表述
+
+$$
+\begin{aligned}
+\theta_t &= \theta_{t-1} + w_t,
+   \qquad w_t \sim \mathcal{N}(0, Q_t) \quad \text{(动态)}\\[2pt]
+\widehat{\theta}_t &= \theta_t + e_t,
+   \qquad e_t \sim \mathcal{N}(0, \sigma_t^2) \quad \text{(观测)}
+\end{aligned}
+$$
+
+在高斯假设下，卡尔曼滤波器可给出闭式后验分布 `θ_t | y_{1:t} ~ N(m_t, P_t)`。对于非高斯/非线性场景， StatsPAI 提供带系统重采样的 bootstrap-SIR 粒子滤波器。
+
+## 3. 两级 API
+
+### 低层级：融合预先计算的流
+
+如果你已经生成了 `(θ̂_t, σ_t)` 流，例如在每个批次上运行 `sp.did` 或 `sp.dml`：
+
+``` python
+import statspai as sp
+
+res = sp.causal_kalman(
+    estimates=[θ̂_1, θ̂_2, ...],
+    standard_errors=[σ_1, σ_2, ...],
+    prior_mean=0.0,
+    prior_var=1.0,
+    process_var=0.0,    # 0 = static effect, >0 = random-walk drift
+    alpha=0.05,
+)
+print(res.summary())
+```
+
+对于重尾观测噪声或非高斯先验，可改用粒子滤波器：
+
+``` python
+res = sp.assimilation.particle_filter(
+    estimates, standard_errors,
+    n_particles=3000,
+    process_sd=0.05,     # random-walk SD
+    random_state=0,
+)
+```
+
+### 高层级：直接融合原始批次
+
+传入批次以及一个 `(df → (θ̂, σ))` 估计器回调函数，流水线会同时处理每批估计和同化：
+
+``` python
+def est(df):
+    r = sp.regress('y ~ d + x', data=df)
+    return float(r.params['d']), float(r.std_errors['d'])
+
+res = sp.assimilative_causal(
+    batches=[batch_jan, batch_feb, ...],
+    estimator=est,
+    prior_mean=0.0,
+    prior_var=1.0,
+    process_var=0.01,       # allow small month-to-month drift
+    backend='kalman',       # or 'particle' for non-Gaussian
+)
+```
+
+## 4. 输出
+
+每种后端都会返回相同的 `AssimilationResult` 数据类：
+
+| 字段 | 形状 | 含义 |
+|-------------------|------------------|-----------------------------------|
+| `posterior_mean` | (T,) | 递推后验均值 `m_t` |
+| `posterior_sd` | (T,) | 递推后验标准差 `sqrt(P_t)` |
+| `posterior_ci` | (T, 2) | 每一步在 `alpha` 水平下的置信区间 |
+| `innovations` | (T,) | 观测惊异度 `θ̂_t − m_{t|t-1}` |
+| `ess` | (T,) | 有效样本量 |
+| `final_mean`, `final_sd`, `final_ci` | 标量 | 流结束时的汇总 |
+| `trajectory()` | 方法 | 将以上结果整理为 DataFrame |
+
+## 5. 端到端示例
+
+```{python}
+#| label: assimilative-end-to-end
+#| eval: true
+import numpy as np, pandas as pd, statspai as sp
+
+# 生成 12 个月的 A/B 测试批次，处理效应缓慢漂移。
+rng = np.random.default_rng(0)
+def make_batch(n, tau, seed):
+    r = np.random.default_rng(seed)
+    d = r.integers(0, 2, n); x = r.normal(size=n)
+    y = tau * d + 0.2 * x + r.normal(scale=0.3, size=n)
+    return pd.DataFrame({'y': y, 'd': d, 'x': x})
+
+tau_path = 0.5 + np.linspace(0, 0.1, 12)   # drifts from 0.5 to 0.6
+batches = [make_batch(300, tau_path[t], seed=t) for t in range(12)]
+
+def est(df):
+    r = sp.regress('y ~ d + x', data=df)
+    return float(r.params['d']), float(r.std_errors['d'])
+
+res = sp.assimilative_causal(
+    batches, est, prior_mean=0.0, prior_var=1.0,
+    process_var=0.001,    # mild drift allowance
+)
+print(res.summary())
+print(res.trajectory().tail())
+```
+
+## 6. 如何选择后端
+
+| 现象 | 使用 |
+|-------------------------------------|-----------------------------------|
+| 每批估计值大致服从高斯分布 | `backend='kalman'`（默认，速度快） |
+| 每批数据存在重尾/离群值 | `backend='particle'` 并使用 Student-t 观测模型 |
+| 先验为非高斯分布（对数正态、有界） | `backend='particle'` + `prior_sampler=...` |
+| 需要实时置信区间带 | 两者均可——都会逐步返回 `posterior_ci` |
+
+## 7. 注意事项
+
+- **输入质量决定输出质量。**滤波器会假设你的逐批估计器经过良好校准（名义置信区间按其标称覆盖率覆盖真值）。请先对估计器运行 `sp.smart.assumption_audit`。
+- **`process_var = 0` 表示效应是静态的。**如果真实效应存在漂移，由于滤波器无法容纳状态创新，得到的置信区间会过度自信。可先设为 `process_var ≈ σ_t² / 10`；若创新项持续呈单侧偏离，再逐步调高。
+- **粒子滤波退化。**如果 `ESS / N < 0.2` 持续出现，请增加 `n_particles` 或放宽观测模型（采用更重的尾部）。
+
+## 8. 参考文献
+
+- *Assimilative Causal Inference* — *Nature Communications* (2026)。
+- Gordon, Salmond & Smith (1993). “Novel approach to nonlinear/non- Gaussian Bayesian state estimation.” *IEE Proc. F.*
+- Douc & Cappé (2005). “Comparison of resampling schemes for particle filtering.” *ISPA*。

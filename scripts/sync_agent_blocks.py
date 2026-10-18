@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Regenerate ``## For Agents`` blocks inside MkDocs guides.
+Regenerate ``## For Agents`` blocks inside Quarto guides.
 
-For every guide that contains a marker pair like::
+For every guide that contains an unlocalized marker pair like::
 
     <!-- AGENT-BLOCK-START: did -->
     ...old content...
@@ -11,6 +11,8 @@ For every guide that contains a marker pair like::
 this script replaces the content between the markers with the
 auto-rendered output of :func:`statspai.render_agent_block` for
 the named function. Guides without markers are left untouched.
+Localized blocks, marked with ``locale=zh-CN``, are preserved because
+the generated English metadata must not overwrite translated content.
 
 Running the script is idempotent: re-running on a synced tree is
 a no-op.  Intended to be invoked before committing registry
@@ -39,7 +41,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 
 START_RE = re.compile(
-    r"<!--\s*AGENT-BLOCK-START:\s*(?P<name>[A-Za-z0-9_]+)\s*-->"
+    r"<!--\s*AGENT-BLOCK-START:\s*(?P<name>[A-Za-z0-9_]+)"
+    r"(?:\s+locale=(?P<locale>[A-Za-z0-9_-]+))?\s*-->"
 )
 END_RE = re.compile(r"<!--\s*AGENT-BLOCK-END\s*-->")
 
@@ -69,6 +72,11 @@ def _sync_text(text: str, path: Path) -> Tuple[str, List[str]]:
             raise RuntimeError(
                 f"{path}: unmatched AGENT-BLOCK-START:{name} (no END marker)"
             )
+
+        if m.group("locale"):
+            out_lines.extend(lines[i:j + 1])
+            i = j + 1
+            continue
 
         # Emit: start marker, a blank line, rendered body, blank line, end marker.
         try:
@@ -129,9 +137,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    guides = sorted(DOCS_DIR.rglob("*.md"))
+    guides = sorted((DOCS_DIR / "guides").glob("*.qmd"))
     if not guides:
-        print(f"No markdown files found under {DOCS_DIR}", file=sys.stderr)
+        print(f"No Quarto guides found under {DOCS_DIR / 'guides'}", file=sys.stderr)
         return 1
 
     total_edits = 0

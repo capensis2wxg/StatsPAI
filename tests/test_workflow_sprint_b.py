@@ -9,7 +9,7 @@ Contract tests for the Sprint-B ecosystem integration:
 3. sp.diagnose_result() dispatches to proximal / msm /
    principal_strat / g_computation / front_door /
    mediation_interventional batteries.
-4. docs/index.md no longer links to the dead guides/did.md page.
+4. docs/index.qmd no longer links to the dead guides/did.qmd page.
 5. sp.modelsummary accepts CausalResult from new modules.
 """
 
@@ -262,16 +262,16 @@ def test_diagnose_result_detects_mediation_interventional():
 
 
 # ---------------------------------------------------------------------
-# 4. docs/index.md no longer links to the dead guides/did.md
+# 4. docs/index.qmd no longer links to the dead guides/did.qmd
 # ---------------------------------------------------------------------
 
-def test_index_md_has_no_stale_did_guide_link():
+def test_index_qmd_has_no_stale_did_guide_link():
     root = Path(__file__).resolve().parent.parent
-    idx = (root / 'docs' / 'index.md').read_text(encoding='utf-8')
-    assert 'guides/did.md' not in idx, (
-        'docs/index.md still contains a link to the non-existent '
-        'guides/did.md; update it to a real guide path '
-        '(e.g. guides/callaway_santanna.md).'
+    idx = (root / 'docs' / 'index.qmd').read_text(encoding='utf-8')
+    assert 'guides/did.qmd' not in idx, (
+        'docs/index.qmd still contains a link to the non-existent '
+        'guides/did.qmd; update it to a real guide path '
+        '(e.g. guides/callaway_santanna.qmd).'
     )
 
 

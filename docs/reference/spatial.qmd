@@ -1,0 +1,68 @@
+# 空间计量经济学
+
+`statspai.spatial` 在一个模块中提供完整的空间分析工具链（v0.8.0，38 个 API 符号），包括空间权重构造、探索性空间数据分析（ESDA）、空间回归（ML 和 GMM）、地理加权回归（GWR / MGWR）及空间面板模型。
+
+## 空间权重
+
+```python
+W = sp.spatial_weights(gdf, method='queen')            # 邻接关系
+W = sp.spatial_weights(gdf, method='knn', k=8)         # k 近邻
+W = sp.spatial_weights(gdf, method='distance', band=50_000)
+W.row_standardise()
+W.transform                                            # 'r' | 'b' | 'v'
+```
+
+## ESDA — 探索性空间数据分析
+
+```python
+sp.moran_i(y, W, permutations=999)        # 全局 Moran's I
+sp.geary_c(y, W, permutations=999)        # 全局 Geary's C
+sp.getis_ord_g(y, W)                      # Getis-Ord G
+sp.local_moran(y, W)                      # LISA — 局部 Moran
+sp.local_geary(y, W)
+sp.join_count(y_bin, W)                   # 分类变量自相关
+```
+
+## 空间回归（横截面）
+
+```python
+# 极大似然
+sp.sar(df, y='price', x=[...], W=W)                  # 空间自回归
+sp.sem(df, y='price', x=[...], W=W)                  # 空间误差
+sp.sdm(df, y='price', x=[...], W=W)                  # Durbin（滞后项 + 滞后 X）
+sp.slx(df, y='price', x=[...], W=W)                  # 仅空间滞后 X
+sp.sarar(df, y='price', x=[...], W1=W1, W2=W2)       # SAR + SEM 组合
+sp.sdem(df, y='price', x=[...], W=W)                 # Durbin 误差
+
+# GMM / IV
+sp.sar_gmm(df, ..., W=W)
+sp.sem_gmm(df, ..., W=W)
+```
+
+## GWR / MGWR — 局部变化系数
+
+```python
+sp.gwr(df, y='price', x=['income','crime'], coords=('lon','lat'),
+       kernel='bisquare', bandwidth='aic')
+sp.mgwr(df, y='price', x=['income','crime'], coords=('lon','lat'))
+```
+
+## 空间面板
+
+```python
+sp.spatial_panel(df, y='gdp', x=['k','l'], W=W,
+                 i='country', t='year',
+                 model='within_sar',     # 'pooled_sar' | 'within_sem' | ...
+                 fe='two-way')
+```
+
+## 结果对象
+
+所有空间回归结果均提供：
+
+```python
+r.summary(); r.to_latex(); r.cite()
+r.direct_effects; r.indirect_effects; r.total_effects   # LeSage-Pace（2009）
+r.plot(kind='residuals')
+r.plot(kind='moran')         # 残差 Moran 散点图
+```

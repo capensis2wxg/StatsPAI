@@ -1,0 +1,135 @@
+# 实验设计中的合成控制
+
+> Abadie & Zhao (2025/2026), *MIT 工作论文* / Cambridge UP 2025。
+
+## 1. 反向工作流
+
+经典合成控制回答的问题是：“我已经有处理单位 *A*——请构造一个重新加权的供体平均值，使其在处理前时期尽可能接近 *A*，然后插补 *A* 在处理后时期的反事实结果。”
+
+**实验设计**则反过来：你有一组候选单位和预算 `k`。你需要决定对哪 `k` 个单位实施处理，以使处理后合成控制 ATT 的置信区间最窄。
+
+在 Abadie-Zhao 框架下，
+
+$$
+\operatorname{Var}\bigl[\widehat{\mathrm{ATT}} \mid D\bigr]
+\;\approx\;
+\sum_{i \in D} \sigma_i^2
+$$
+
+其中 $\sigma_i^2$ 是单位 `i` 的合成控制拟合中可行的处理前 MSPE。选择处理前 MSPE 最小的 `k` 个候选单位可使此方差最小化。
+
+## 2. API
+
+```python
+import statspai as sp
+
+res = sp.synth_experimental_design(
+    data=df,              # long-format panel
+    unit='unit',
+    time='time',
+    outcome='y',
+    k=5,                  # budget: treat 5 units
+    pre_period=(0, 19),   # closed interval, pre-treatment periods
+    candidates=None,      # default: all units are candidates
+    donors=None,          # default: non-candidates; leave-one-out fallback
+    risk='mspe',          # 'mspe' or 'rmse'
+    concentration_weight=0.0,  # penalise Herfindahl weight concentration
+    penalization=0.0,     # simplex-solver ridge penalty
+    n_random=500,         # Monte-Carlo sample for the random-assignment baseline
+    random_state=0,
+)
+```
+
+返回一个 `SynthExperimentalDesignResult`，包含：
+
+- `selected`——推荐的 `k` 个单位
+- `ranking`——包含各候选单位风险评分的 DataFrame
+- `weights`——各候选单位的供体权重向量（用于审计）
+- `expected_variance`、`baseline_variance`——按最优选择与随机分配计算的 MSPE 总和
+- `summary()`——人类可读报告
+
+## 3. 合成面板数据示例
+
+```{python}
+#| label: synth-experimental-end-to-end
+#| eval: true
+import numpy as np, pandas as pd, statspai as sp
+
+rng = np.random.default_rng(0)
+n_units, n_periods = 30, 20
+F = rng.normal(size=(n_periods, 3))
+L = rng.normal(size=(n_units, 3))
+Y = L @ F.T + 0.1 * rng.normal(size=(n_units, n_periods))
+
+df = pd.DataFrame([
+    {'unit': i, 'time': t, 'y': Y[i, t]}
+    for i in range(n_units) for t in range(n_periods)
+])
+
+res = sp.synth_experimental_design(
+    df, unit='unit', time='time', outcome='y',
+    k=5, pre_period=(0, 19), random_state=0, n_random=200,
+)
+print(res.summary())
+```
+
+在这个面板中，仅通过在实验开始前选择表现良好的单位，预期方差就会比随机分配**低 96%**——处理后 CI 收窄至原来的三分之一，且无需额外成本。
+
+## 4. 何时使用此方法，何时使用 `sp.synth`
+
+| 阶段                          | 函数                       |
+|-------------------------------|--------------------------------|
+| 决定对哪些单位实施处理 | `sp.synth_experimental_design` |
+| 估计处理后反事实 | `sp.synth(method='classic')`   |
+| 对 ATT 进行推断          | `sp.scpi` / `sp.sdid`          |
+| 跨估计器稳健性检查    | `sp.synth_compare`             |
+
+两者是**顺序衔接**的：先在规划阶段运行 `synth_experimental_design`，之后开展实验，再将结果交给常规的 `sp.synth` 流程。
+
+## 5. 常见问题
+
+- **处理前时期必须为平衡面板。** 如果任一 `(unit, time)` 单元格为 NaN，函数就会报错。
+- 将 `candidates` 设为所有单位会触发留一法回退——每个候选单位的供体池将包含其他 `n - 1` 个单位。这样可以正常运行，但计算量会增加。
+- **`concentration_weight > 0`** 会添加 Herfindahl 惩罚项，避免选中其合成控制拟合依赖单一供体的单位——Abadie-Zhao (2025/2026) 论文建议在供体池较小时使用 `concentration_weight ≈ 0.5`。
+
+## 6. 参考文献
+
+- Abadie, A. & Zhao, J. (2025/2026).
+  *Synthetic Controls for Experimental Design.*  MIT / Cambridge UP.
+- Abadie, A. (2021). "Using synthetic controls: feasibility, data
+  requirements, and methodological aspects." *JEL* 59(2).
+
+<!-- AGENT-BLOCK-START: synth locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 长格式面板数据（单位 × 时间 × 结果）
+- 单个处理单位（经典方法）或处理时点列（错位处理）
+- ≥ 10 个具有相似处理前轨迹的供体（未处理）单位
+- ≥ 10 个处理前时期（更少时，某一年可能会获得过大的权重）
+
+**识别假设**
+- 处理效应由供体权重隐含的反事实识别
+- 处理单位对供体单位没有溢出效应（SUTVA）
+- 供体池包含其结果有可能跟踪处理单位反事实结果的单位
+- 为进行安慰剂推断，处理前拟合（RMSPE）相对于处理后效应较小
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| 处理前 RMSPE > 处理后效应 | `AssumptionWarning` | 处理前拟合不佳——切换到 method='demeaned'/'augmented' 或扩大供体池。 | `sp.synth` |
+| 存在明显差距，但安慰剂 p 值 ≥ 0.1 | `AssumptionWarning` | 使用 inference='conformal'（在较弱假设下有效），或报告安慰剂统计量的排序。 | `sp.synth` |
+| 所有权重都集中在一个供体上 | `AssumptionWarning` | 存在插值偏差风险——检查 method='elastic_net' 或增强 SCM。 | `sp.synth` |
+| 处理单位位于供体凸包之外 | `IdentificationFailure` | 需要外推——使用 method='unconstrained' 或 'augmented'。 | `sp.synth` |
+
+**备选方案（按优先级排序）**
+- `sp.sdid`
+- `sp.did`
+- `sp.matrix_completion`
+- `sp.causal_impact`
+
+**典型最小 N**：10
+
+<!-- AGENT-BLOCK-END -->

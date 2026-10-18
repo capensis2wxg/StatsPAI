@@ -1,0 +1,77 @@
+# DiD 模块 — API 参考
+
+## 核心估计器
+
+### `sp.callaway_santanna(data, y, g, t, i, ...)`
+
+Callaway 与 Sant'Anna（2021）的错位实施 DID。端到端示例请参阅
+[指南](../guides/callaway_santanna.qmd)。
+
+主要参数：
+
+| 名称 | 默认值 | 含义 |
+| --- | --- | --- |
+| `estimator` | `'dr'` | `'dr'` (Sant'Anna–Zhao doubly robust), `'ipw'`, or `'reg'` |
+| `control_group` | `'nevertreated'` | Or `'notyettreated'` |
+| `base_period` | `'universal'` | Or `'varying'` |
+| `anticipation` | `0` | Periods of anticipation (CS2021 §3.2) |
+| `panel` | `True` | `False` for repeated cross-sections |
+| `x` | `None` | Covariate list |
+
+### `sp.aggte(result, type='simple', ...)`
+
+统一聚合，并使用 Mammen（1993）乘数自助法。
+
+`type` ∈ `{'simple', 'dynamic', 'group', 'calendar'}`.
+
+相关参数：
+
+| 名称 | 默认值 | 含义 |
+| --- | --- | --- |
+| `n_boot` | 1000 | Multiplier-bootstrap replications |
+| `random_state` | `None` | RNG seed |
+| `balance_e` | `None` | Balance cohorts across `e ∈ [0, balance_e]` |
+| `min_e` / `max_e` | `-inf` / `inf` | Event-time window |
+| `cband` | `True` | Attach uniform confidence band columns |
+
+除 `simple` 外，结果的 `detail` 数据框会为所有聚合类型提供
+`cband_lower` / `cband_upper` 列。
+
+### `sp.cs_report(data_or_result, ..., save_to=None)`
+
+一键运行完整分析流程并生成报告。详情请参阅
+[指南](../guides/cs_report.qmd)。返回 `CSReport` 数据类，提供
+`.plot()`、`.to_markdown()`、`.to_latex()`、`.to_excel()` 和
+`.to_text()` 方法。
+
+### `sp.sun_abraham(data, y, g, t, i, ...)`
+
+Sun 与 Abraham（2021）的交互加权事件研究，使用 Liang–Zeger 聚类稳健夹心标准误。
+
+### `sp.did_imputation(data, ..., horizon=None)`
+
+Borusyak、Jaravel 与 Spiess（2024）的插补估计器。
+
+### `sp.did_multiplegt(data, ..., placebo=0, dynamic=0)`
+
+用于处理状态反复切换情形的 de Chaisemartin–D'Haultfoeuille DID，
+包含 dCDH（2024）联合安慰剂 Wald 检验和平均累积效应。
+
+## 敏感性分析
+
+### `sp.honest_did(result, e, m_grid=None, method='smoothness')`
+### `sp.breakdown_m(result, e, method='smoothness')`
+
+Rambachan 与 Roth（2023）方法。接受任何包含事件研究结果的
+`CausalResult`（CS、SA、BJS 或 `aggte(dynamic)`）。
+
+### `sp.bjs_pretrend_joint(result, data, ..., n_boot=300, seed=None)`
+
+对 BJS 插补结果执行聚类自助法联合 Wald 前趋势检验。该检验使用完整协方差结构，替代默认的 z² 和检验（后者假设处理前时期相互独立）。
+
+## 可视化
+
+### `sp.ggdid(result, ax=None, ...)`
+
+`aggte()` 可视化工具，可叠加均匀置信带。根据
+`result.model_info['aggregation']`.

@@ -1,6 +1,6 @@
 """Tests for ``sp.auto_cate`` — one-line multi-learner CATE race.
 
-Spec: docs/superpowers/specs/2026-04-20-v094-auto-cate-strict-id-design.md
+Spec: docs/superpowers/specs/2026-04-20-v094-auto-cate-strict-id-design.qmd
 """
 from __future__ import annotations
 

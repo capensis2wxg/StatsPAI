@@ -577,7 +577,7 @@ def _battery_proximal(result, alpha: float = 0.05) -> Dict[str, Any]:
         "interpretation": (
             f"Bridge='{bridge}'. Linear is the only shipped option; "
             "non-linear bridges require Mastouri et al. 2021 / Deaner "
-            "2018 methodology (see docs/ROADMAP.md §1)."
+            "2018 methodology (see docs/ROADMAP.qmd §1)."
         ),
     })
 
@@ -614,7 +614,7 @@ def _battery_proximal(result, alpha: float = 0.05) -> Dict[str, Any]:
                 "First-stage F not reported for k_w > 1. The correct "
                 "diagnostic is the Cragg-Donald / Kleibergen-Paap "
                 "minimum-eigenvalue statistic — not yet shipped (see "
-                "docs/ROADMAP.md §2)."
+                "docs/ROADMAP.qmd §2)."
             ),
         })
 

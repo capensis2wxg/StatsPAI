@@ -6,7 +6,7 @@ Validates that StatsPAI's DID estimators:
    classic 2x2 DID == Callaway-Sant'Anna == Sun-Abraham == Wooldridge
    up to sampling noise (all are consistent when effect is homogeneous).
 
-See REFERENCES.md for the source of each tolerance and the population
+See REFERENCES.qmd for the source of each tolerance and the population
 parameters each DGP targets.
 """
 from __future__ import annotations

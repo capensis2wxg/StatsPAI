@@ -114,7 +114,7 @@ def interference(design: str = "partial", /, **kwargs: Any) -> Any:
 
     See Also
     --------
-    docs/guides/interference_family.md : the full family guide.
+    docs/guides/interference_family.qmd : the full family guide.
     """
     if design not in _REGISTRY:
         raise ValueError(

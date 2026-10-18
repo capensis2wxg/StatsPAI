@@ -148,7 +148,7 @@ def mr(method: str = "ivw", /, **kwargs: Any) -> Any:
 
     See Also
     --------
-    docs/guides/mendelian_family.md : the full family guide.
+    docs/guides/mendelian_family.qmd : the full family guide.
     """
     if method not in _REGISTRY:
         raise ValueError(

@@ -1,0 +1,178 @@
+# 政治学面板数据的 Panel Shift-Share IV
+
+> Park & Xu (arXiv:2603.00135, 2026) §4.2，方差采用
+> Adão-Kolesár-Morales (QJE 2019) 方法。
+
+## 1. 适用场景
+
+在以下条件**全部满足**时，使用 `sp.shift_share_political_panel`：
+
+- 你拥有**单位 × 时间**面板数据（州 × 年、县 × 选举周期等）。
+- 内生回归变量由单位特定的*暴露份额*乘以一个共同的*冲击*向量构成——即经典的 Bartik / shift-share 设定。
+- 份额、冲击，或二者都随时间变化。
+- 你需要带固定效应的合并 2SLS，并采用 Park-Xu (2026) §4.2 指定为政治学面板数据默认选择的 AKM 冲击聚类 SE。
+
+对于单期（横截面 / 长差分）设计，请改用 `sp.shift_share_political` 或 `sp.bartik`。
+
+## 2. API
+
+```python
+import statspai as sp
+
+res = sp.shift_share_political_panel(
+    data=df,                    # long-format unit × time panel
+    unit='state',
+    time='year',
+    outcome='vote_share',
+    endog='exposure',
+
+    # --- shares: either time-invariant (DataFrame unit×industry)
+    # ---          or per-period (dict[time -> DataFrame])
+    shares=shares,
+
+    # --- shocks: either (1) Series (industry -> scalar; constant across time)
+    # ---          or    (2) DataFrame (time × industry)
+    # ---          or    (3) dict[time -> Series]
+    shocks=shocks,
+
+    covariates=['demographic_controls', 'fiscal_base'],
+    fe='two-way',               # two-way | unit | time | none
+    cluster='shock',            # shock | unit | time | twoway
+    alpha=0.05,
+)
+print(res.summary())
+```
+
+返回一个 `ShiftSharePoliticalPanelResult`，包含：
+
+- `estimate`、`se`、`ci`——`endog` 的合并 2SLS 系数
+- `per_period`——按 `time` 列出的横截面估计值 DataFrame（可直接绘制为事件研究图）
+- `rotemberg_panel`——按行业拆解并汇总所有时期的权重
+- `share_balance`——对处理前协变量和份额矩阵进行的 F 检验
+- `diagnostics`——包括 `cluster` 标签、`akm_se`、`first_stage_F`
+
+## 3. AKM 冲击聚类 SE
+
+对 shift-share 设计而言，标准的单位或双向聚类 SE **不一致**：这些方法忽略了共享同一冲击的观测会通过共同冲击项而相关，而非通过地理聚类相关。Adão-Kolesár-Morales (2019) 推导出正确的方差估计量：在**冲击**层面聚类，并采用份额加权得分。Park-Xu (2026) §4.2 将其扩展到面板数据：
+
+$$
+u_k \;=\; \sum_{i, t}\, s_{ikt}\, \tilde Z_{it}\, \hat\varepsilon_{it},
+\qquad
+\widehat{\mathrm{Var}}(\hat\beta) \;=\;
+\frac{\sum_k u_k^2}{\bigl(\hat D'_{\mathrm{fit}}\,\tilde D\bigr)^2}
+$$
+
+其中 $\tilde{\cdot}$ 表示对固定效应去均值。传入 `cluster='shock'` 即可使用该方差估计；`diagnostics['akm_se']` 字段也会填入结果，便于并列报告这两个数值。
+
+在干净的 Park-Xu 风格 DGP 中，如果行业数为 10–100，冲击聚类 SE 通常比单位聚类 SE **小约 3 倍**，因为它正确地识别到：单位间的同期相关性由少数共同冲击驱动，而非单位层面的特异性扰动。
+
+## 4. 固定效应选项
+
+| `fe`         | 吸收的效应           | 适用情况                   |
+|--------------|---------------------------|--------------------------------|
+| `'two-way'`  | 单位 + 时间固定效应（默认） | 几乎所有情况——Park-Xu 默认选择 |
+| `'unit'`     | 仅单位固定效应             | 时间不变的份额 + 强时间趋势 |
+| `'time'`     | 仅时间固定效应             | 单位较少的平衡面板 |
+| `'none'`     | 不含固定效应                    | 需要纯粹的跨时期合并估计 |
+
+该函数通过减去均值的方式在内部完成固定效应去均值——如果单位超过 500 且时期超过 20，可考虑先使用
+`sp.fixest.feols` 吸收固定效应，然后将残差传给此函数并设置 `fe='none'`。
+
+## 5. 端到端示例
+
+```{python}
+#| label: shift-share-end-to-end
+#| eval: true
+import numpy as np, pandas as pd, statspai as sp
+
+rng = np.random.default_rng(0)
+units, times, inds = list(range(100)), list(range(4)), [f'I{k}' for k in range(15)]
+
+shares = pd.DataFrame(
+    rng.dirichlet(np.ones(15), size=len(units)),
+    index=units, columns=inds,
+)
+shocks = pd.DataFrame(
+    rng.normal(size=(len(times), 15)),
+    index=times, columns=inds,
+)
+
+rows = []
+tau = 0.30
+for i in units:
+    for t in times:
+        b = float((shares.loc[i] * shocks.loc[t]).sum())
+        x = b + rng.normal(scale=0.1)
+        y = tau * x + rng.normal(scale=0.1)
+        rows.append({'u': i, 't': t, 'y': y, 'x': x})
+df = pd.DataFrame(rows)
+
+res = sp.shift_share_political_panel(
+    df, unit='u', time='t', outcome='y', endog='x',
+    shares=shares, shocks=shocks, cluster='shock',
+)
+print(res.summary())
+```
+
+在此 DGP 上的预期输出：估计值约为 0.296，冲击聚类 SE 约为 0.009，各时期的事件研究结果稳定在 0.3 左右，Rotemberg 权重排名前 5 的行业合计约占 95%。
+
+## 6. 前趋势 / 安慰剂检验
+
+由于 `res.per_period` 表为每年提供一个估计值，你可以直接将其传给事件研究绘图辅助工具，也可以自行编写前趋势 Wald 检验：
+
+```python
+pre = res.per_period[res.per_period['time'] < treatment_year]
+wald = (pre['estimate'] / pre['se']).pow(2).sum()
+import scipy.stats as stats
+p = 1 - stats.chi2.cdf(wald, df=len(pre))
+print(f'Joint pretrend p-value: {p:.3f}')
+```
+
+## 7. 常见问题
+
+- **行业集合不对齐。** 如果 `shares.columns` 与 `shocks.index` 没有任何共同标签，函数会报错。如果两者仅部分重叠，函数会静默取交集——请使用 `res.n_industries` 确认交集大小。
+- **第一阶段极弱。** 检查 `res.diagnostics['first_stage_F']`；当去除固定效应后的工具变量接近于零时，冲击聚类方差估计会急剧增大。
+- **份额平衡。** 如果处理前协变量上的份额平衡 F 检验显著，说明份额可能编码了潜在的单位特征——可考虑将相应变量添加到 `covariates=`，然后重新运行。
+
+## 8. 参考文献
+
+- Park, P. K. & Xu, Y. (2026).
+  *Shift-Share Designs in Political Science.*  arXiv:2603.00135.
+- Adão, R., Kolesár, M. & Morales, E. (2019).
+  *Shift-Share Designs: Theory and Inference.*  QJE 134(4).
+- Borusyak, K., Hull, P. & Jaravel, X. (2022).
+  *Quasi-Experimental Shift-Share Research Designs.*  ReStud 89.
+
+<!-- AGENT-BLOCK-START: bartik locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 处理前份额已预先确定（严格在结果窗口之前测量）
+- 给定单位层面控制变量后，冲击近似随机
+- AKM shift-share SE 要获得良好有限样本性质，需 ≥ 50 个地区
+- 行业 / 组别数量足够（n_shares × avg_share_concentration 不应过于集中）
+
+**识别假设**
+- 给定处理前暴露结构，冲击外生（Borusyak-Hull-Jaravel）
+- 冲击层面 IV：冲击与地区层面的未观测趋势相互独立
+- 渐近框架：冲击数量较多（L → ∞）——通过 sp.ssaggregate Herfindahl 指标检查
+- 第一阶段相关性：Bartik 指标能够预测局部暴露
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| 份额的 Herfindahl 指数过于集中（单一行业占主导） | `statspai.AssumptionWarning` | shift-share SE 不可靠——使用 sp.shift_share_se 计算 Adão-Kolesár-Morales 冲击层面 SE。 | `sp.shift_share_se` |
+| 第一阶段 F < 10 | `statspai.AssumptionWarning` | 份额对暴露的预测能力不足——报告对弱 IV 稳健的 CI（sp.anderson_rubin_ci）。 | `sp.anderson_rubin_ci` |
+| 冲击与前趋势相关 | `statspai.AssumptionViolation` | 冲击外生性假设失效——删除违反条件的冲击维度或添加趋势控制变量。 |  |
+
+**备选方案（按优先级排序）**
+- `sp.iv`
+- `sp.shift_share_se`
+- `sp.shift_share_political`
+- `sp.shift_share_political_panel`
+
+**典型最小 N**：100
+
+<!-- AGENT-BLOCK-END -->

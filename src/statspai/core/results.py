@@ -1096,10 +1096,11 @@ class CausalResult:
         # Pre-trend test
         if 'pretrend_test' in self.model_info:
             pt = self.model_info['pretrend_test']
+            statistic = pt.get('statistic', pt.get('chi2', float('nan')))
             lines.append("-" * 78)
             lines.append(
-                f"  Pre-trend Test: chi2({pt['df']}) = {pt['statistic']:.4f}, "
-                f"p-value = {pt['pvalue']:.4f}"
+                f"  Pre-trend Test: chi2({pt.get('df', 0)}) = {statistic:.4f}, "
+                f"p-value = {pt.get('pvalue', float('nan')):.4f}"
             )
             lines.append("")
 

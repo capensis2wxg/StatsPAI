@@ -1,0 +1,198 @@
+# G 方法家族
+
+Robins 提出的**因果推断 g 方法**，适配 StatsPAI 的 `CausalResult` API。这些方法都用于评估假设干预下的反事实结果分布，但在估计哪些干扰参数（结果模型、处理模型或两者）以及所依赖的识别假设方面有所不同。
+
+| 估计器 | 适用情形 | 识别条件 |
+| --- | --- | --- |
+| `sp.g_computation` | 结果模型可信；适用于清晰的剂量—反应曲线。 | 无混杂性 |
+| `sp.front_door` | 存在未观测的后门混杂，但中介完整传递 D 对 Y 的影响。 | Pearl 前门准则 |
+| `sp.msm` | 处理随时间变化，且存在受既往处理影响的时变混杂因素。 | 序贯可交换性 + 正值性 |
+| `sp.mediate_interventional` | 存在由处理引起的中介—结果混杂因素的中介分析。 | 干预效应（不要求跨世界假设） |
+
+相关模块（详见其他页面）：
+
+* `sp.aipw`、`sp.tmle`、`sp.dml` — `g_computation` 的双重稳健近亲方法，
+  使用正交得分 / 有效影响函数进行推断。
+* `sp.mediate` — 经典自然直接效应与间接效应（Imai-Keele-Tingley，2010）；
+  详见下文中介分析部分的说明。
+
+---
+
+## `sp.g_computation` — 参数化 g 公式 / 标准化
+
+给定结果回归 :math:`Q(d, X) = E[Y | D=d, X]`，g 公式对应的边际反事实结果为
+
+$$
+E[Y(d)] = E_X[\, Q(d, X) \,].
+$$
+
+```python
+# 二元处理 — ATE
+r = sp.g_computation(df, y='wage', treat='trained',
+                     covariates=['age', 'edu', 'exp'])
+
+# 二元处理 — ATT
+r = sp.g_computation(df, y='wage', treat='trained',
+                     covariates=['age', 'edu'],
+                     estimand='ATT')
+
+# 连续 / 多值处理 — 剂量—反应曲线
+r = sp.g_computation(df, y='bp', treat='dose',
+                     covariates=['age', 'bmi'],
+                     estimand='dose_response',
+                     treat_values=[0, 10, 20, 30])
+r.detail   # pd.DataFrame: dose / estimate / se / ci_lower / ci_upper / pvalue
+```
+
+**学习器**：默认使用 statsmodels 的 OLS。也可通过 `ml_Q=` 传入任何兼容 sklearn 的回归器，以进行灵活拟合：
+
+```python
+from sklearn.ensemble import GradientBoostingRegressor
+r = sp.g_computation(df, y='y', treat='d', covariates=[...],
+                     ml_Q=GradientBoostingRegressor(n_estimators=200))
+```
+
+**推断**：采用非参数自助法，并通过 NaN 追踪失败次数。可检查 `r.model_info['n_boot_failed']`。
+
+**与 AIPW/TMLE 的关系**：当结果模型正确设定时，`g_computation` 一致，但**不具备双重稳健性**。如需结果模型或倾向得分模型任一正确设定即可保障覆盖率，请使用 `sp.aipw` 或 `sp.tmle`。
+
+---
+
+## `sp.front_door` — Pearl 前门调整
+
+当未观测混杂因素使后门准则无法成立，但中介变量 `M` 完整传递 D 对 Y 的影响时，可识别 `E[Y | do(D)]`：
+
+```text
+U ──┬──► D ──► M ──► Y
+    │             ▲
+    └─────────────┘     (U unobserved)
+```
+
+前门公式：
+
+$$
+E[Y | do(D=d)] = \sum_m P(M=m | D=d) \cdot \sum_{d'} P(D=d') \cdot E[Y | D=d', M=m].
+$$
+
+```python
+# 二元中介 — 闭式求和
+r = sp.front_door(df, y='y', treat='d', mediator='m',
+                  covariates=['x'],
+                  mediator_type='binary')
+
+# 连续中介 — 高斯蒙特卡洛积分
+r = sp.front_door(df, y='y', treat='d', mediator='m',
+                  covariates=['x'],
+                  mediator_type='continuous',
+                  integrate_by='marginal',    # Pearl 1995 aggregate
+                  n_mc=200)
+```
+
+**`integrate_by`** 用于选择两种识别变体：
+
+| 取值 | 解释 |
+| --- | --- |
+| `'marginal'`（默认） | Pearl（1995）总体边际方法 — 从总体边际分布联合抽取 (X, M) 的蒙特卡洛样本。 |
+| `'conditional'` | Fulcher 等（2020）广义前门方法 — 对每个个体，根据 `P(M \| D=d, X_i)` 抽取 M。 |
+
+对于不含协变量或中介变量为二元的情形，两种方法结果相同
+（`model_info['integrate_by_effective']` 会明确记录实际采用的方法）。
+
+**连续处理**：目前会返回明确错误，并提示改用
+`sp.g_computation(estimand='dose_response')`（参阅路线图 §4）。
+
+---
+
+## `sp.msm` — 边际结构模型（稳定化 IPTW）
+
+Robins（1998、2000）提出该方法用于处理**时变处理**及受既往处理影响的时变混杂因素。标准回归调整会造成效应偏差（既阻断因果路径，*又*打开碰撞点）；MSM 通过处理逆概率加权的合并结果回归将二者分离。
+
+```python
+# 长格式面板：每个（个体、时期）组合占一行
+r = sp.msm(panel, y='cd4_count', treat='hiv_therapy',
+           id='patient_id', time='visit',
+           time_varying=['cd4_lag', 'viral_load_lag'],
+           baseline=['age', 'sex'],
+           exposure='cumulative',    # 'cumulative' | 'current' | 'ever'
+           trim=0.01,                # 对权重进行对称截尾
+           trim_per_period=False)    # Cole 与 Hernán §3 中的逐期截尾方式可设为 True
+```
+
+单位 i 在时点 t 的稳定化权重：
+
+$$
+sw_{i,t} = \prod_{s \le t}
+   \frac{P(A_s = a_s | \bar{A}_{s-1}, V)}
+        {P(A_s = a_s | \bar{A}_{s-1}, \bar{L}_s, V)}
+$$
+
+对 :math:`Y` 关于累积暴露（及基线变量 V）进行加权合并回归，可恢复**边际**因果参数；标准误采用按单位聚类的 CR1 稳健估计。
+
+**权重诊断**保存在 `model_info` 中：
+
+```python
+r.model_info['sw_mean']       # 模型设定正确时应约等于 1
+r.model_info['sw_max']        # 极端权重监测
+r.model_info['trim_per_period']
+```
+
+**独立辅助函数**：`sp.stabilized_weights(...)` 返回每行的权重向量，不拟合结果模型，可用于自定义加权估计器。
+
+**连续 / 多值处理**：支持基于高斯密度比的权重
+（`treat_type='continuous'`）。`exposure='ever'` 要求 A 为二元变量。
+
+---
+
+## `sp.mediate_interventional` — 干预效应
+
+VanderWeele、Vansteelandt 与 Robins（2014）的干预直接效应和间接效应。当存在**由处理引起的中介—结果混杂因素**、自然效应无法识别时，该方法可识别因果分解。
+
+```python
+r = sp.mediate_interventional(
+    df, y='y', treat='d', mediator='m',
+    covariates=['x_baseline'],
+    tv_confounders=['L'],    # 由处理引起的 M-Y 混杂因素
+    n_mc=500, n_boot=500,
+    pvalue_method='bootstrap_sign',   # 或 'wald'（见下文）
+)
+
+r.estimate   # IIE（干预间接效应）
+r.detail     # IIE / IDE / 总效应分解
+```
+
+分解定义：
+
+* **IIE**（干预间接效应）:math:`= E[Y(1, G_{M|1})] - E[Y(1, G_{M|0})]`
+* **IDE**（干预直接效应）:math:`= E[Y(1, G_{M|0})] - E[Y(0, G_{M|0})]`
+* **总效应** :math:`= E[Y(1, G_{M|1})] - E[Y(0, G_{M|0})] = IIE + IDE`
+
+其中 :math:`G_{M|d}` 是在 `D = d` 下从 :math:`M` 的边际分布中随机抽取的值，并对协变量进行积分。
+
+**`pvalue_method`**：
+
+* `'bootstrap_sign'`（默认）— 通过反演自助法置信区间计算 p 值，与 `sp.mediate()` 的约定一致。
+* `'wald'` — 常规 :math:`2(1 - \Phi(|\hat\theta/\hat{se}|))`，与其他因果推断函数（如 AIPW、DML）一致。
+
+**线性假设**：当前实现固定使用 OLS 结果回归，因此蒙特卡洛积分可通过
+:math:`\beta_{TV} \cdot \mathrm{mean}(X_{TV})` 解析化简，运行时间为
+`O(n_mc + n)`。非线性结果模型（GBM、神经网络）会破坏该向量化计算，目前暂不支持。
+
+---
+
+## 参考文献
+
+- Robins, J. (1986). A new approach to causal inference in mortality
+  studies. *Mathematical Modelling*.
+- Pearl, J. (1995). Causal diagrams for empirical research.
+  *Biometrika*.
+- Robins, Hernán & Brumback (2000). Marginal structural models and
+  causal inference in epidemiology. *Epidemiology*.
+- VanderWeele, Vansteelandt & Robins (2014). Effect decomposition in
+  the presence of an exposure-induced mediator-outcome confounder.
+  *Epidemiology*.
+- Fulcher et al. (2020). Robust inference on population indirect
+  causal effects: the generalized front-door criterion. *JRSS-B*.
+- Cole & Hernán (2008). Constructing inverse probability weights for
+  marginal structural models. *American Journal of Epidemiology*.
+- Hernán & Robins (2020). *Causal Inference: What If*. Chapman &
+  Hall/CRC — comprehensive textbook treatment of g-methods.

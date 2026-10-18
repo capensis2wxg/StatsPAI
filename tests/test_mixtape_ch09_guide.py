@@ -1,4 +1,4 @@
-"""Regression test: the docs/guides/mixtape_ch09_did.md code-blocks run.
+"""Regression test: the docs/guides/mixtape_ch09_did.qmd code-blocks run.
 
 The Mixtape-chapter-9 guide is the flagship notebook-style replication.
 If any of its code snippets stop running, the guide rots silently and

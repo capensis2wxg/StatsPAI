@@ -1,0 +1,70 @@
+# 平行趋势敏感性分析——Rambachan & Roth（2023）
+
+平行趋势是一项假设，而非事实。Rambachan & Roth（2023）回答了一个实际问题：*平行趋势可能偏离到什么程度，处理后结论才会反转？* StatsPAI 将他们的方法直接集成到库中每个事件研究对象。
+
+## 函数
+
+| 函数 | 用途 |
+| --- | --- |
+| `sp.honest_did(result, e, m_grid=None, method='smoothness')` | 针对事件时间 `e`，在一系列违背幅度 `M` 上计算稳健置信区间 |
+| `sp.breakdown_m(result, e, method='smoothness')` | 效应仍显著时所允许的最大 `M*` |
+
+这两个函数都是*多态的*，可接受：
+
+- `callaway_santanna()` 的结果（事件研究数据位于 `model_info`），
+- `sun_abraham()` 的结果，
+- 或 `aggte(type='dynamic')` 的结果（事件研究数据位于 `detail`，并带有 Mammen 一致置信带）。
+
+## 典型工作流
+
+```python
+cs  = sp.callaway_santanna(df, y='y', g='g', t='t', i='id')
+es  = sp.aggte(cs, type='dynamic', n_boot=500, random_state=0)
+s   = sp.honest_did(es, e=1)          # robust CI table across M grid
+mst = sp.breakdown_m(es, e=1)         # scalar breakdown value
+```
+
+## 限制类型
+
+- `method='smoothness'`——对每一对相邻时期限制 $|\Delta \delta_t| \le M$（Δ^SD(M)）。参数 `M` 的单位是每期结果变量的变化量。
+- `method='relative_magnitude'`——将处理后时期的违背限制为 `M̄ × max|δ_pre|`。适用于希望以观测到的前趋势偏离幅度为基准表达敏感性的场景。
+
+## 通过 `cs_report()` 一次运行
+
+[`cs_report`](cs_report.qmd) 报告卡会在每个处理后事件时间运行 `breakdown_m`，并将结果存储在 `rpt.breakdown` 中。`robust_at_1_SE` 列标记效应在违背幅度等于一个逐点标准误时是否仍然成立。
+
+<!-- AGENT-BLOCK-START: did locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 数据为面板数据或含时间列的重复横截面数据
+- treat 列为 2x2 设计的二元变量（0/1），或错位设计中的首次处理时期（整数）
+- 至少有一个处理前时期（2x2 至少需要 ≥ 2 个时期；事件研究建议 ≥ 3 个时期）
+- 错位设计需要有用于标识跨时期单位的 id 列
+
+**识别假设**
+- 平行趋势：若不存在处理，处理组和对照组本应遵循相同轨迹
+- 无预期效应：处理前时期的结果不受未来处理影响
+- SUTVA：单位之间不存在溢出
+- 对于错位 / 异质性效应：使用 CS 或 SA——TWFE 可能产生负权重（Goodman-Bacon）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 前趋势联合检验 p < 0.05（或检验力不足，阈值为 0.10） | `AssumptionViolation` | 使用 sp.sensitivity_rr（Rambachan & Roth 诚实置信区间），或改用 sp.callaway_santanna。 | `sp.sensitivity_rr` |
+| 处理时间错位但使用 TWFE 方法 | `AssumptionWarning` | TWFE 可能产生负权重；使用 Callaway-Sant'Anna、Sun-Abraham 或 BJS 插补法。 | `sp.callaway_santanna` |
+| 前趋势检验检验力不足（Roth 2022） | `AssumptionWarning` | 检查 sp.pretrends_power——若检验力较低，通过 sp.sensitivity_rr 报告诚实置信区间。 | `sp.sensitivity_rr` |
+| 单位层面的聚类数过少 | `AssumptionWarning` | 使用 wild cluster bootstrap（sp.wild_cluster_bootstrap）。 | `sp.wild_cluster_bootstrap` |
+
+**替代方法（按优先级排序）**
+- `sp.callaway_santanna`
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.synth`
+
+**典型最小样本量 N**：50
+
+<!-- AGENT-BLOCK-END -->

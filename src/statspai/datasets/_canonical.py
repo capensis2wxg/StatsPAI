@@ -91,7 +91,7 @@ def mpdta(seed: int = 42) -> pd.DataFrame:
         "Simulated replica matching mpdta structure; "
         "calibrated for ATT ≈ -0.04. Numerical parity with R::did on the "
         "original mpdta is documented in "
-        "tests/external_parity/PUBLISHED_REFERENCE_VALUES.md."
+        "tests/external_parity/PUBLISHED_REFERENCE_VALUES.qmd."
     )
     return df
 

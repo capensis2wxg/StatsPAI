@@ -1,0 +1,128 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - index.qmd
+    - stats.qmd
+    - changelog.qmd
+    - ROADMAP.qmd
+    - guides/*.qmd
+    - reference/*.qmd
+
+execute:
+  freeze: auto
+
+website:
+  title: StatsPAI
+  repo-url: https://github.com/brycewang-stanford/StatsPAI
+  navbar:
+    left:
+      - text: 首页
+        href: index.qmd
+      - text: 生态统计
+        href: stats.qmd
+      - text: 路线图
+        href: ROADMAP.qmd
+      - text: 变更日志
+        href: changelog.qmd
+    right:
+      - icon: github
+        href: https://github.com/brycewang-stanford/StatsPAI
+        aria-label: GitHub
+  sidebar:
+    - title: 指南
+      style: docked
+      search: true
+      contents:
+        - section: 因果推断指南
+          contents:
+            - text: 错位实施 DID：Callaway–Sant’Anna
+              href: guides/callaway_santanna.qmd
+            - text: Callaway–Sant’Anna 报告
+              href: guides/cs_report.qmd
+            - text: 重复横截面
+              href: guides/repeated_cross_sections.qmd
+            - text: Honest DID 敏感性分析
+              href: guides/honest_did.qmd
+            - text: 如何选择 DID 估计器
+              href: guides/choosing_did_estimator.qmd
+            - text: 如何选择 RD 估计器
+              href: guides/choosing_rd_estimator.qmd
+            - text: 如何选择 IV 估计器
+              href: guides/choosing_iv_estimator.qmd
+            - text: 如何选择匹配估计器
+              href: guides/choosing_matching_estimator.qmd
+            - text: 稳健性分析工作流
+              href: guides/robustness_workflow.qmd
+            - text: 桥接定理：不同方法何时估计同一目标量
+              href: guides/bridging_theorems.qmd
+            - text: v1.2 前沿估计器
+              href: guides/v1_2_frontier.qmd
+            - text: 实验设计中的合成控制
+              href: guides/synth_experimental.qmd
+            - text: DID 与事件研究设计的全面汇集
+              href: guides/harvest_did.qmd
+            - text: 同化因果推断
+              href: guides/assimilative_ci.qmd
+            - text: 政治学面板 Shift-Share IV
+              href: guides/shift_share_political_panel.qmd
+            - text: 合成控制
+              href: guides/synth.qmd
+            - text: Mixtape 第 9 章：双重差分
+              href: guides/mixtape_ch09_did.qmd
+            - text: 论文流水线：从问题到草稿
+              href: guides/paper_pipeline.qmd
+        - section: 方法家族指南
+          contents:
+            - text: 因果多智能体：LLM 因果发现
+              href: guides/causal_mas.qmd
+            - text: 因果强化学习方法族
+              href: guides/causal_rl_family.qmd
+            - text: 因果文本分析方法族
+              href: guides/causal_text_family.qmd
+            - text: 保形因果推断方法族
+              href: guides/conformal_family.qmd
+            - text: 干扰与溢出效应方法族
+              href: guides/interference_family.qmd
+            - text: LLM 辅助因果发现
+              href: guides/llm_dag_family.qmd
+            - text: 孟德尔随机化方法族
+              href: guides/mendelian_family.qmd
+            - text: 近端因果推断方法族
+              href: guides/proximal_family.qmd
+            - text: 分位数与分布处理效应方法族
+              href: guides/qte_family.qmd
+            - text: 从 R 迁移到 StatsPAI
+              href: guides/migration-from-r.qmd
+    - title: API 参考
+      style: docked
+      contents:
+        - reference/index.qmd
+        - section: 方法参考
+          contents:
+            - reference/did.qmd
+            - reference/rd.qmd
+            - reference/synth.qmd
+            - reference/decomposition.qmd
+            - reference/frontier.qmd
+            - reference/multilevel.qmd
+            - reference/dml.qmd
+            - reference/causal.qmd
+            - reference/g_methods.qmd
+            - reference/proximal.qmd
+            - reference/principal_stratification.qmd
+            - reference/sensitivity.qmd
+            - reference/smart.qmd
+            - reference/spatial.qmd
+            - reference/timeseries.qmd
+            - reference/survival.qmd
+  page-footer:
+    center: "StatsPAI · MIT License"
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    code-copy: true
+    code-link: true
+    smooth-scroll: true

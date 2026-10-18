@@ -67,6 +67,7 @@ class TestCausalViolations:
         # DID result with mccrary field should not be flagged as RD issue
         assert not any(v["test"] == "mccrary_density" for v in did.violations())
 
+
     def test_rhat_flagged(self):
         r = _make_causal_result(model_info={"rhat_max": 1.15})
         vs = r.violations()
@@ -102,6 +103,24 @@ class TestCausalViolations:
         )
         # DID result is not IV, so weak-IV rule shouldn't fire
         assert not any(v["test"] == "weak_instrument" for v in did.violations())
+
+
+class TestCausalSummary:
+    def test_pretrend_summary_accepts_harvest_chi2_field(self):
+        result = _make_causal_result(
+            model_info={
+                "pretrend_test": {
+                    "chi2": 2.5,
+                    "df": 2,
+                    "pvalue": 0.2865,
+                }
+            }
+        )
+
+        summary = result.summary()
+
+        assert "Pre-trend Test: chi2(2) = 2.5000" in summary
+        assert "p-value = 0.2865" in summary
 
 
 class TestCausalAgentSummary:

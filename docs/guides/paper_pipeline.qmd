@@ -1,0 +1,173 @@
+# `sp.paper()` — 数据到论文草稿的完整流程
+
+> 只需一次调用，即可从 DataFrame 和自然语言问题生成一份
+> 可供发表的初稿（Markdown、LaTeX 或 Word），其中预先整合了 EDA、
+> 识别检查、推荐估计量、拟合结果和稳健性检验套件。
+
+## 适用场景
+
+- 你已有数据和研究问题；希望得到**可编辑的初稿**，而不是幻灯片。
+- 你正在协调一个**自主代理**，需要它在无需分析人员逐步指导的情况下生成实证报告。
+- 你希望单个产物不仅包含点估计，还能说明选择该估计量的**原因**（识别策略与假设）。
+
+如果只需要拟合模型，请直接使用对应的估计器
+（`sp.regress`、`sp.did`、`sp.iv` 等）。如果希望运行完整流程但不渲染结果，请使用 `sp.causal()`。
+
+## 快速开始
+
+```python
+import statspai as sp
+import pandas as pd
+
+df = pd.read_stata("nlsw88.dta")
+
+draft = sp.paper(
+    df,
+    "effect of training on wage",
+    treatment="training",
+    y="wage",
+    covariates=["education", "experience"],
+)
+
+print(draft.to_markdown())   # human readable
+draft.write("nlsw88_draft.tex")  # LaTeX
+draft.write("nlsw88_draft.docx") # Word (requires python-docx)
+```
+
+## 输出内容
+
+`PaperDraft` 包含**七个部分**：
+
+| 部分 | 内容 |
+|---------|----------|
+| 问题 | 自然语言问题，以及解析得到的结果变量、处理变量和研究设计。 |
+| 数据 | 样本量、缺失值最多的前 5 个变量、结果变量矩、处理变量分布、各组协变量均值、标准化差异。 |
+| 识别 | `sp.check_identification` 给出的结论，以及每项发现的严重程度和修正方法。 |
+| 估计量 | 推荐方法、`sp.<fn>()` 调用、选择理由和关键假设。 |
+| 结果 | 估计值、SE、95% CI、p 值、n_obs（回归分析则给出系数表）。 |
+| 稳健性 | 针对具体方法的检验套件（例如 DiD 的平行趋势检验和 e-value；IV 的第一阶段 F 统计量和 AR-CI）。 |
+| 参考文献 | 从 `result.cite()` 获取的 BibTeX 风格条目。 |
+
+如果任一阶段失败，还会额外添加**流程说明**部分，因此草稿不会悄然隐藏错误。
+
+## 问题解析器
+
+`sp.paper()` 会运行轻量级解析器，从自然语言问题中提取列提示，**但显式传入的 kwargs 始终优先**。
+
+| 模式 | 示例 | 提示 |
+|---------|---------|-------|
+| "effect of X on Y" | "effect of training on wage" | treatment=training, y=wage |
+| "Y ~ X" | "wage ~ training" | y=wage, treatment=training |
+| "difference-in-differences" / "did" | "DiD effect of ..." | design='did' |
+| "regression discontinuity" / "rd" | "RD with running variable score" | design='rd', running_var='score' |
+| "instrument(ing)? <Z>" | "using distance as an instrument" | design='iv', instrument='distance' |
+| "discontinuity at <c>" / "threshold <c>" | "threshold at 0.5" | cutoff=0.5, design='rd' |
+
+解析器**绝不会覆盖**显式参数，只会补充你未提供的参数。若要完全绕过解析器，请显式传入所有参数。
+
+```python
+draft = sp.paper(
+    df,
+    question="(any string)",  # parser ignored when args complete
+    y="wage", treatment="training", design="did",
+    time="year", id="worker_id",
+)
+```
+
+## 渲染格式
+
+### Markdown
+默认格式。适合在 Jupyter、GitHub 中渲染，也可作为 PR 描述的起点。
+
+```python
+draft.to_markdown()
+```
+
+### LaTeX
+将相同内容封装为完整的 `article` 文档，并附带规范的
+`thebibliography`。行内 Markdown 标记（`**粗体**`、反引号代码、
+项目符号列表和代码围栏）会转换为对应的 LaTeX 格式。
+
+```python
+tex = draft.to_tex()
+draft.write("paper.tex")
+```
+
+### Word
+需要 `pip install python-docx`。如果缺少该依赖，会回退为带有提示标题的 Markdown 文件，不会静默崩溃。
+
+```python
+draft.to_docx("paper.docx")
+```
+
+## 与 StatsPAI 其他功能组合
+
+### 与 LLM-DAG 配合
+
+```python
+# Step 1: build a validated DAG (P1-A)
+dag = sp.llm_dag_constrained(df, variables=[...],
+                              oracle=...).to_dag()
+
+# 步骤 2：将其传入论文生成流程
+draft = sp.paper(df, "effect of X on Y", dag=dag)
+```
+
+### 与代理工具调用配合
+
+`sp.paper` 已注册完整的代理元数据
+（`assumptions`、`pre_conditions`、`failure_modes`、`alternatives`）：
+
+```python
+schema = sp.function_schema('paper')
+# → 可用作 OpenAI / Anthropic 工具定义的 JSON schema
+```
+
+`PaperDraft.to_dict()` 方法会返回可序列化为 JSON 的数据，可用于代理工具调用的往返传递。
+
+## 代理须知
+
+- **前置条件**：`data` 必须包含结果变量（通过 `y=` 传入，或从“effect of X on Y”解析得到）。流程绝不会擅自虚构列。
+- **恢复处理**：任何单个阶段失败时，错误会记录在 `Pipeline notes` 部分而不是抛出异常；代理在接受草稿为完整结果前，应检查 `len(draft.workflow.diagnostics.findings)` 以及是否存在“Pipeline notes”。
+- **确定性**：在数据和参数相同的情况下，输出逐位可复现（除非用户通过 `dag=` 传入此前 LLM-DAG 运行的结果，否则不会调用 LLM）。
+- **成本**：工作流运行次数为 O(1)（一次诊断、一次估计和一次稳健性分析）。进行敏感性扫描时，请单独使用 `sp.spec_curve`。
+
+## 注意事项
+
+1. **启发式解析器**——如果问题措辞不常见，请显式传入 `y` 和 `treatment`。解析器有意采取保守策略：宁可漏掉提示，也不会错误填入参数。
+2. **稳健性检验套件因研究设计而异**——DiD 会执行平行趋势检验和 e-value；IV 会检查第一阶段 F 统计量。自定义稳健性检验应添加到底层的 `CausalWorkflow`（`sp.causal(...)`）中。
+3. **引文**：如果结果对象提供了 `cite()` 方法，就会从中提取引文；目前并非所有估计器都实现了该方法。
+4. **默认不调用 LLM**——除非通过 `dag=` 接入 LLM-DAG，否则 `sp.paper` 完全是确定性的。
+
+## 参考资料
+
+- `CausalWorkflow`（`sp.causal(...)`）：底层的流程编排器。
+- `sp.check_identification`：识别阶段的诊断工具。
+- `sp.recommend`：估计量选择规则引擎。
+- `sp.evalue_from_result`、`sp.honest_did`、`sp.anderson_rubin_ci`、
+  `sp.rdsensitivity`：针对不同研究设计的稳健性分析原语。
+
+<!-- AGENT-BLOCK-START: paper locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- data 必须包含结果列（`y` 或解析所得变量）
+- 如果给定处理变量，它必须是一个列
+
+**识别假设**
+- 问题解析器采用启发式规则——显式 kwargs 始终优先
+- 未指定研究设计时，由底层的 sp.causal() 确定
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| ValueError 'Could not determine the outcome y' | `ValueError` | 显式传入 `y=...`，或在问题文本中加入 'effect of X on Y' |  |
+| 草稿中出现 Pipeline notes 部分 | `(none — informational)` | 一个流程阶段失败；检查 `draft.workflow.diagnostics` 和 pipeline_errors |  |
+
+**备选方案（按优先级排序）**
+- `sp.causal`
+- `sp.recommend`
+
+<!-- AGENT-BLOCK-END -->

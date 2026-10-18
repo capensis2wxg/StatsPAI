@@ -1,6 +1,6 @@
 """
 Contract tests for the "deferred-with-escape-hatch" items documented
-in docs/ROADMAP.md.
+in docs/ROADMAP.qmd.
 
 Each test locks in the **user-facing contract** that lets callers work
 around the deferred feature — so future refactors that silently break

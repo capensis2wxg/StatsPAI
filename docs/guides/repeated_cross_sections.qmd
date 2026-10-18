@@ -1,0 +1,93 @@
+# 重复横截面（`panel=False`）
+
+经典的 Callaway–Sant'Anna 方法要求平衡面板：每个时期都观察到每个个体。许多因果推断数据集是*重复横截面*（RCS）——合并调查数据（CPS、ACS）、滚动民意调查、每期独立抽样——无法进行个体内的一阶差分。StatsPAI 的 RCS 路径使用无条件 2×2 单元格均值 DID 解决这一问题。
+
+## 估计器
+
+对于每个 `(g, t, base)` 三元组，使用从未处理组 `c = 0` 作为对照：
+
+$$
+\widehat{\text{ATT}}(g, t)
+  = (\bar{Y}_{g, t} - \bar{Y}_{g, b})
+  - (\bar{Y}_{c, t} - \bar{Y}_{c, b})
+$$
+
+观测层面的影响函数为
+
+$$
+\psi_i
+  = \frac{\mathbf{1}\{G_i=g,\,T_i=t\}(Y_i - \bar{Y}_{g,t})}{p_{g,t}}
+  - \frac{\mathbf{1}\{G_i=g,\,T_i=b\}(Y_i - \bar{Y}_{g,b})}{p_{g,b}}
+  - \frac{\mathbf{1}\{G_i=c,\,T_i=t\}(Y_i - \bar{Y}_{c,t})}{p_{c,t}}
+  + \frac{\mathbf{1}\{G_i=c,\,T_i=b\}(Y_i - \bar{Y}_{c,b})}{p_{c,b}}
+$$
+
+其中 $p_{\cdot,\cdot}$ 是经验单元格占比。影响函数被堆叠到与面板估计器相同的 `inf_matrix` 接口中，因此下游的 `aggte`、`cs_report`、`ggdid` 和 `honest_did` 均可直接使用，无需修改。
+
+## 用法
+
+```python
+sp.callaway_santanna(
+    df, y='y', g='first_treat', t='year', i='obs_id',
+    estimator='reg',          # required for panel=False
+    panel=False,
+)
+```
+
+## 协变量调整
+
+添加 `x=[...]` 可进行回归调整的 RCS。使用从未处理样本（包含时期固定效应）拟合 OLS，使 Y 对 X 回归并取残差；然后对残差化后的结果变量运行单元格均值 DID：
+
+```python
+sp.callaway_santanna(
+    survey_df, y='wage', g='g', t='year', i='obs',
+    estimator='reg', panel=False,
+    x=['age', 'education', 'female'],
+)
+```
+
+影响函数将 β̂ 视为已知（插件式 IF），在 √n 渐近下有效。计划增加完全耦合的 Sant'Anna–Zhao (2020) IF 增强。
+
+## 当前实现范围
+
+- `estimator` 必须为 `'reg'`
+- `control_group` 必须为 `'nevertreated'`
+- RCS 的 IPW / DR：计划在未来版本实现
+
+所有其他路径都会抛出 `NotImplementedError`，并附带可操作的提示信息。
+
+<!-- AGENT-BLOCK-START: did locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 数据为面板数据或重复横截面数据，并包含时间列
+- 对于 2x2 设计，treat 列为二元变量（0/1）；对于错位处理，treat 列为首次处理期（整数）
+- 至少有一个处理前时期（2x2 设计至少需要 ≥ 2 个时期；事件研究建议 ≥ 3 个时期）
+- 对于错位设计：需要用于标识跨期个体的 id 列
+
+**识别假设**
+- 平行趋势：若没有处理，处理组和对照组会遵循相同的轨迹
+- 无预期效应：处理前各期的结果不受未来处理影响
+- SUTVA：个体之间不存在溢出效应
+- 对于错位处理 / 异质效应：使用 CS 或 SA——TWFE 可能产生负权重（Goodman-Bacon）
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| 前趋势联合检验 p < 0.05（或在 0.10 水平下检验效能不足） | `AssumptionViolation` | 使用 sp.sensitivity_rr（Rambachan & Roth 诚实 CI）或改用 sp.callaway_santanna。 | `sp.sensitivity_rr` |
+| 使用 TWFE 方法处理错位处理时点 | `AssumptionWarning` | TWFE 可能产生负权重；请改用 Callaway-Sant'Anna、Sun-Abraham 或 BJS 插补法。 | `sp.callaway_santanna` |
+| 前趋势检验效能不足（Roth 2022） | `AssumptionWarning` | 检查 sp.pretrends_power——若检验效能较低，则通过 sp.sensitivity_rr 报告诚实 CI。 | `sp.sensitivity_rr` |
+| 单位层面的聚类数量较少 | `AssumptionWarning` | 使用 wild cluster bootstrap（sp.wild_cluster_bootstrap）。 | `sp.wild_cluster_bootstrap` |
+
+**备选方案（按优先级排序）**
+- `sp.callaway_santanna`
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.synth`
+
+**典型最小 N**：50
+
+<!-- AGENT-BLOCK-END -->

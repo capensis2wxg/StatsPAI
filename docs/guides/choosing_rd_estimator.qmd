@@ -1,0 +1,161 @@
+# 如何选择 RD 估计量
+
+## 0. 快速决策流程图
+
+```
+阈值处的处理分配是否为确定性的（P(D=1|X>=c)=1）？
+  是 -> 锐断点回归（Sharp RD）
+  否 -> 阈值是否改变处理概率？
+          是 -> 模糊断点回归（Fuzzy RD，Wald 比率）
+          否 -> RD 无法识别；可考虑聚集分析或 DID
+
+运行变量在阈值处有何特征？
+  连续密度        -> 标准局部多项式（sp.rdrobust）
+  离散（基于时间）-> RDiT（sp.rdit）
+  折点（导数跳跃）-> RKD（sp.rkd）
+  两个运行变量    -> sp.rd2d
+  多个阈值        -> sp.rdmulti
+  阈值附近随机化  -> 局部随机化（sp.rdrandinf）
+```
+
+## 1. 默认方法：采用 CCT 稳健置信区间的锐断点回归（Sharp RD）
+
+```python
+r = sp.rdrobust(df, y='y', x='running_var', c=0.0,
+                kernel='triangular', bwselect='mserd')
+r.summary()
+```
+
+这是 Calonico-Cattaneo-Titiunik（2014）方法：
+- 三角核 + MSE 最优带宽
+- 偏差校正点估计
+- 考虑偏差校正的稳健标准误
+
+**不要使用朴素的局部线性回归**——它忽略偏差，因此会低估标准误。
+
+## 2. 模糊断点回归（Fuzzy RD）
+
+```python
+r = sp.rdrobust(df, y='y', x='running_var', c=0.0, fuzzy='treatment_var')
+```
+
+Fuzzy RD 识别服从者的 LATE。此外还应报告：
+- 处理概率的第一阶段跳跃（`r.model_info['first_stage']`）
+- 工具变量有效性的 Kitagawa 检验（`sp.kitagawa_test`）
+
+## 3. 方法变体决策树
+
+| 情形 | 方法 |
+|---------------------------------------------|---------------------------------|
+| 标准连续 x 的 Sharp RD | `sp.rdrobust` |
+| 标准 Fuzzy RD | `sp.rdrobust(..., fuzzy='d')` |
+| 离散运行变量（例如日期） | `sp.rdit` |
+| Kink 设计（斜率跳跃，而非水平跳跃） | `sp.rkd` |
+| 二维阈值 | `sp.rd2d` |
+| 多个阈值（学区边界） | `sp.rdmulti` |
+| 阈值附近的局部随机化 | `sp.rdrandinf` |
+| 异质性效应 | `sp.rdhte`, `sp.rd_forest` |
+| 基于 ML 的阈值外推 | `sp.rd_extrapolate` |
+| 诚实推断（Armstrong-Kolesar） | `sp.rd_honest` |
+| 阈值处的操纵 / 堆积 | `sp.bunching` + `sp.rddensity` |
+
+## 4. 必须进行的诊断
+
+每篇 RD 论文都必须报告这些诊断。StatsPAI 提供了一站式调用：
+
+```python
+# 1. 密度连续性（不存在操纵）
+sp.rddensity(df, x='running_var', c=0.0)
+sp.mccrary_test(df, x='running_var', c=0.0)
+
+# 2. 检查阈值两侧协变量平衡
+sp.rdbalance(df, x='running_var', c=0.0, covariates=[...])
+
+# 3. 安慰剂阈值
+sp.rdplacebo(df, y='y', x='running_var',
+             true_cutoff=0.0, placebo_cutoffs=[-0.5, 0.5])
+
+# 4. 带宽敏感性
+sp.rdbwsensitivity(df, y='y', x='running_var', c=0.0)
+
+# 5. 检验效能
+sp.rdpower(df, y='y', x='running_var', c=0.0, tau=[0.1, 0.5, 1.0])
+```
+
+或者一次调用完成：
+```python
+r = sp.rdrobust(df, y='y', x='running_var', c=0.0)
+r.next_steps()  # 输出按优先级排列的检查清单
+```
+
+## 5. 带宽选择
+
+`bwselect='mserd'`（默认值）是针对 RD 设计的 MSE 最优带宽。其他选项：
+
+| `bwselect`   | 适用场景 |
+|--------------|----------------------------------------------------------|
+| `'mserd'`    | 默认——MSE 最优，使用共同带宽 |
+| `'msetwo'`   | 阈值两侧使用不同带宽 |
+| `'cerrd'`    | 覆盖误差率最优（置信区间覆盖率更好） |
+| `'certwo'`   | CER 最优，使用两个带宽 |
+| 固定 `h=`    | 由你指定（用于稳健性检查） |
+
+经验法则：点估计使用 `mserd`，并运行 `cerrd` 检查置信区间覆盖率的稳健性。
+
+## 6. 多项式阶数
+
+默认 `p=1`（局部线性）。Gelman & Imbens（2019）强烈反对使用高阶多项式。将 `p=2`（局部二次）作为敏感性检查报告，而非首选设定。`p>=3` 几乎没有合理依据。
+
+## 7. 阅读输出
+
+```python
+r = sp.rdrobust(df, y='y', x='x', c=0.0)
+r.estimate         # 点估计（偏差校正）
+r.se               # 稳健标准误
+r.ci               # 稳健置信区间
+r.model_info['bandwidth_h']    # Chosen bandwidth h
+r.model_info['bandwidth_b']    # Bias-correction bandwidth b
+r.model_info['n_effective_left'], ['n_effective_right']  # Obs used
+r.tidy()           # 包含常规、偏差校正和稳健结果行
+r.glance()         # 观测数、带宽、核函数和估计器
+r.plot()           # 默认使用系数图；分箱散点图请用 sp.rdplot
+```
+
+## 8. 不应使用 RD 的情形
+
+- **没有明显的不连续性**：先检查 `sp.rdplot`；如果图中没有跳跃，就没有可估计的效应。
+- **阈值处发生堆积**：McCrary / RD 密度检验会发现此现象。请改用 `sp.bunching`。
+- **运行变量是选择变量**：识别会失败。请改用 IV 或 DiD。
+
+<!-- AGENT-BLOCK-START: rdrobust locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 运行变量 x 连续，且在 c 两侧均有取值
+- 处理分配由阈值 c 决定（Sharp），或在 c 处概率性变化（Fuzzy）
+- 最优带宽内有足够的观测值
+
+**识别假设**
+- 潜在结果关于 x 在 c 处连续（Hahn, Todd, van der Klaauw 2001）
+- x 在 c 处不存在操纵（McCrary 密度检验）
+- 局部随机化仅在 c 附近成立——无法识别从该范围向外的外推效应
+- c 处协变量平衡（可选，但建议检查）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| McCrary 密度检验 p < 0.05 | `AssumptionViolation` | 使用甜甜圈 RD（donut=<δ>）或部分识别界限。 | `sp.rdrobust` |
+| 阈值处协变量不平衡（sp.rdbalance 拒绝原假设） | `AssumptionViolation` | 将协变量作为控制变量纳入、缩窄带宽，或在报告中说明。 |  |
+| 效应在带宽减半后不稳定 | `AssumptionWarning` | 报告 sp.rdbwsensitivity 和 sp.rd_honest（Armstrong-Kolesár 诚实置信区间）。 | `sp.rd_honest` |
+| 安慰剂阈值显示显著“效应” | `AssumptionViolation` | RD 信号可能是噪声；寻找其他识别策略。 | `sp.bounds` |
+
+**替代方法（按优先级排序）**
+- `sp.rd_honest`
+- `sp.rdrbounds`
+- `sp.bounds`
+
+**典型最小样本量 N**：500
+
+<!-- AGENT-BLOCK-END -->

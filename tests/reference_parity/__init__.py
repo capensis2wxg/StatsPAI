@@ -9,5 +9,5 @@ Tests in this directory validate StatsPAI estimators against:
 3. **Pinned outputs**: fixed-seed DGPs with hardcoded numerical outputs
    as drift guards.
 
-Every numerical reference is sourced in ``REFERENCES.md``.
+Every numerical reference is sourced in ``REFERENCES.qmd``.
 """

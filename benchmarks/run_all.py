@@ -1,4 +1,4 @@
-"""Run all benchmarks and write RESULTS.md + results.json.
+"""Run all benchmarks and write RESULTS.qmd + results.json.
 
 Usage:
     python benchmarks/run_all.py --quick   (small N, ~ 30s)
@@ -77,8 +77,8 @@ def main(mode: str = 'quick') -> None:
     with open(os.path.join(HERE, 'results.json'), 'w') as f:
         json.dump(all_results, f, indent=2)
 
-    _render_markdown(all_results, os.path.join(HERE, 'RESULTS.md'))
-    print(f"\nResults written to {HERE}/RESULTS.md and results.json")
+    _render_markdown(all_results, os.path.join(HERE, 'RESULTS.qmd'))
+    print(f"\nResults written to {HERE}/RESULTS.qmd and results.json")
 
 
 def _render_markdown(results: dict, path: str) -> None:

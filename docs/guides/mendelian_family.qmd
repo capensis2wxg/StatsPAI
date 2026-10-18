@@ -1,0 +1,499 @@
+# 孟德尔随机化——完整方法族
+
+> **你的工具变量来自生殖系。** 孟德尔随机化（MR）将遗传变异
+>（假定在受孕时随机分配）作为工具变量，用于识别可调节暴露
+> 对下游结果的因果效应。StatsPAI 提供了完整的汇总统计量 MR
+> 工具包：四种点估计器、六种诊断检验、三种多暴露扩展以及两种
+> 绘图辅助工具——与 R 的 `MendelianRandomization` 和
+> `TwoSampleMR` 软件包逐字节对齐。
+
+MR 有三个识别假设，传统上称为 **IV1 / IV2 / IV3**：
+
+1. **IV1（相关性）**：SNP 与暴露相关。
+2. **IV2（独立性）**：SNP 与暴露—结果混杂因素相互独立。
+3. **IV3（排除限制）**：SNP **仅**通过暴露影响结果（不存在水平多效性）。
+
+IV3 失效是最经典的威胁。下文的方法套件围绕“你担心哪种 IV3
+违反情形”组织，并提供相应的估计器 + 诊断组合。
+
+以下所有函数均位于顶层：`sp.mendelian_randomization`、
+`sp.mr_ivw`、`sp.mr_egger`、`sp.mr_median`、`sp.mr_mode`、
+`sp.mr_heterogeneity`、`sp.mr_pleiotropy_egger`、`sp.mr_leave_one_out`、
+`sp.mr_steiger`、`sp.mr_presso`、`sp.mr_radial`、`sp.mr_f_statistic`、
+`sp.mr_multivariable`、`sp.mr_mediation`、`sp.mr_bma`、
+`sp.mr_funnel_plot`、`sp.mr_scatter_plot`。
+
+---
+
+## 1. 一行调用——`sp.mendelian_randomization`
+
+一体化分发器；默认运行 IVW + MR-Egger + 加权中位数，并返回
+统一的 `MRResult`：
+
+```python
+r = sp.mendelian_randomization(
+    data=snp_df,
+    beta_exposure="beta_x", se_exposure="se_x",
+    beta_outcome="beta_y", se_outcome="se_y",
+    exposure_name="BMI", outcome_name="T2D",
+    methods=["ivw", "egger", "weighted_median"],  # add "penalized_median"
+)
+print(r.summary())
+r.plot()
+```
+
+摘要块还会返回 IVW Cochran Q 异质性检验和 MR-Egger 截距的
+方向性多效性检验。需要更具体的结果时，请直接调用子估计器。
+
+参考文献：Burgess et al. (2013), *Genet Epidemiol* 37(7)。
+
+---
+
+## 2. 点估计器——四种假设配置
+
+### `sp.mr_ivw`——逆方差加权
+
+主力估计器。对 SNP 特异的 Wald 比值进行固定效应元分析，
+权重为 `1/se_Y_i²`。在**不存在多效性**（无论平衡与否）时
+具有一致性；当 IV3 成立时，在四种估计器中功效最高。
+
+```python
+res = sp.mr_ivw(beta_x, beta_y, se_x, se_y, alpha=0.05)
+print(res["estimate"], res["se"], res["Q"], res["I2"])
+```
+
+**适用场景**：作为默认方法。始终报告该结果。如果它与下文
+三种稳健估计器不一致，这种差异*就是*多效性的信号。
+
+### `sp.mr_egger`——方向性多效性
+
+拟合 `β_Y = α + β * β_X`，其中 `α` 是平均多效性截距。
+在 **InSIDE 假设**（工具变量强度与直接效应独立）下，点估计
+具有一致性：多效性效应与 SNP—暴露效应不相关。
+
+```python
+res = sp.mr_egger(beta_x, beta_y, se_x, se_y, alpha=0.05)
+print(res["estimate"], res["intercept"], res["intercept_p"])
+```
+
+**适用场景**：怀疑存在**方向性**多效性（所有无效 SNP 都会
+造成同方向偏差）。非零 Egger 截距即为证据。InSIDE 无法检验——
+因此敏感性分析至关重要。
+
+参考文献：Bowden et al. (2015), *IJE* 44(2)。
+
+### `sp.mr_median`——加权 / 惩罚中位数
+
+当至少 **50% 的权重**来自有效工具变量时，估计具有一致性
+（Bowden et al. 2016）。惩罚版本会降低 IVW 残差较大的 SNP
+权重，从而提高估计器对少数强异常值的稳健性：
+
+```python
+res = sp.mr_median(beta_x, beta_y, se_x, se_y,
+                    penalized=False, n_boot=1000, seed=0)
+res_pen = sp.mr_median(beta_x, beta_y, se_x, se_y,
+                       penalized=True, n_boot=1000, seed=0)
+```
+
+**适用场景**：怀疑部分 SNP 无效，但受污染的权重不超过一半。
+标准误通过参数自助法计算。
+
+参考文献：Bowden et al. (2016), *Genet Epidemiol* 40(4)。
+
+### `sp.mr_mode`——众数法（ZEMPA）
+
+在**零众数多效性假设**（ZEro Modal Pleiotropy Assumption）下
+具有一致性：跨 SNP 的 Wald 比值众数等于真实因果效应，即使
+*大多数* SNP 无效——只要无效 SNP 不会聚集在同一个多效性效应值上。
+
+```python
+res = sp.mr_mode(beta_x, beta_y, se_x, se_y,
+                 method="weighted",     # or "simple"
+                 n_boot=1000, seed=0)
+```
+
+**适用场景**：四种方法中假设最宽松——当 IVW、Egger 和中位数
+都给出不一致结果时，这是最后一道防线。对 Wald 比值分布使用
+加权高斯核众数，带宽由 Silverman 规则确定。
+
+参考文献：Hartwig, Davey Smith & Bowden (2017), *IJE* 46(6)。
+
+---
+
+## 3. 诊断——必须报告的六项检验
+
+### `sp.mr_heterogeneity`——Cochran's Q / Rücker's Q'
+
+Wald 比值的 SNP 间变异是否超过单纯由抽样误差所能解释的程度？
+如果是，说明**至少有一个** SNP 存在多效性。
+
+```python
+res = sp.mr_heterogeneity(beta_x, beta_y, se_y, method="ivw")
+# 计算基于 Egger 方法的 Rücker Q'：
+res = sp.mr_heterogeneity(beta_x, beta_y, se_y, method="egger", se_exposure=se_x)
+print(res.Q, res.Q_p, res.I2)
+```
+
+`I² > 25%` → 中度异质性；`I² > 50%` → 显著异质性。IVW
+仍然具有一致性，但报告的标准误会过于乐观——改用随机效应
+IVW，或使用稳健估计器。
+
+### `sp.mr_pleiotropy_egger`——方向性多效性检验
+
+MR-Egger 截距 `α` 及其 `t(n-2)` p 值（与 R 的
+`MendelianRandomization` 软件包约定一致；使用 `t` 而非 `z`，
+因为 `σ²` 是代入估计的）：
+
+```python
+res = sp.mr_pleiotropy_egger(beta_x, beta_y, se_y)
+print(res.intercept, res.p_value)
+```
+
+`p < 0.05` → 有方向性多效性的证据 → 相较于 `mr_ivw`，更应
+信赖 `mr_egger` / `mr_median` / `mr_mode`。
+
+### `sp.mr_leave_one_out`——逐个 SNP 的影响分析
+
+依次剔除每个 SNP 并重新计算 IVW。适用于识别单个驱动 SNP：
+
+```python
+res = sp.mr_leave_one_out(beta_x, beta_y, se_y,
+                          snp_ids=rsid_list, alpha=0.05)
+print(res.table)    # dropped_snp, estimate, se, ci_lower, ci_upper, p_value
+```
+
+警示信号：如果剔除一个 SNP 后点估计变化超过 25%，该 SNP
+承担了大部分识别工作——请通过 `PhenoScanner` / `Open Targets
+Genetics` 检查它是否存在多效性关联。
+
+### `sp.mr_steiger`——方向性
+
+检验工具变量是否能解释暴露的方差**多于**结果的方差。如果
+不是，则因果方向可能颠倒：
+
+```python
+res = sp.mr_steiger(
+    beta_exposure=beta_x, se_exposure=se_x, n_exposure=n_x,
+    beta_outcome=beta_y, se_outcome=se_y, n_outcome=n_y,
+    eaf=eaf_per_snp,          # optional; uses t² / (t² + n - 2) fallback
+)
+print(res.correct_direction, res.steiger_pvalue)
+```
+
+**务必首先运行此检验**——它成本低，而且能发现反向因果情形；
+如果存在这种情形，所有下游 MR 结果都没有意义。
+
+参考文献：Hemani et al. (2017), *PLOS Genetics* 13(11)。
+
+### `sp.mr_presso`——全局检验 + 异常值校正
+
+Verbanck et al. (2018) 提出的异常值识别方法，包含：
+1. **全局检验**——总体多效性是否超过无多效性假设下的预期？
+  （通过 RSS 的模拟零分布进行检验）
+2. **逐 SNP 异常值检验**——哪些具体 SNP 超出了零分布范围？
+3. **异常值校正 IVW**——剔除被标记的 SNP 后重新拟合。
+4. **偏移检验**——校正后的估计值是否与原始估计值有显著差异？
+
+```python
+res = sp.mr_presso(
+    beta_x, beta_y, se_x, se_y,
+    n_boot=1000, sig_threshold=0.05, seed=0,
+)
+print(res.summary())
+print(res.outliers)                          # flagged SNP indices
+print(res.outlier_corrected_estimate)        # re-IVW after dropping outliers
+```
+
+**适用场景**：如果有 ≥ 10 个 SNP，务必使用。全局检验的 p 值
+是判断“是否存在多效性问题”最可靠的信号。
+
+参考文献：Verbanck et al. (2018), *Nature Genetics* 50(5)。
+
+### `sp.mr_radial`——Bowden (2018) 径向图 + Q 贡献
+
+将每个 SNP 的 Wald 比值重新参数化为“径向”空间中的坐标，
+并标记其对 Cochran's Q 的单独 χ² 贡献超过 Bonferroni 阈值的 SNP：
+
+```python
+res = sp.mr_radial(beta_x, beta_y, se_y, snp_ids=rsids)
+print(res.outliers)             # SNPs to investigate
+print(res.table.nlargest(5, "q_contribution"))
+```
+
+**适用场景**：作为 `mr_presso` 的补充——当 `n_snps` 较小时，
+径向 MR 对 I 类错误的控制更好。如果两种方法都标记了同一个
+SNP，该 SNP 的表现就值得怀疑。
+
+参考文献：Bowden et al. (2018), *IJE* 47(4)。
+
+---
+
+## 4. 工具变量强度——`sp.mr_f_statistic`
+
+基于汇总统计量的近似公式计算逐 SNP F 统计量：
+`F_i = (β_i / SE_i)²`。Staiger-Stock (1997) 的经验法则认为，
+每个 SNP 都需要满足 `F ≥ 10`，以避免弱工具变量偏差：
+
+```python
+res = sp.mr_f_statistic(beta_x, se_x, n_samples=N_exposure_GWAS)
+print(res.f_mean, res.f_min, res.weak_instrument_risk)
+```
+
+`f_min < 10` → 最弱的 SNP 是弱工具变量 → MR 估计可能向有混杂的
+观测估计偏移。补救方法：剔除弱 SNP，或使用 **LIML / GRAPPLE**
+（StatsPAI 当前尚未提供——请先按 GWAS p 值阈值 `5e-8` 进行筛选）。
+
+参考文献：Staiger & Stock (1997), *Econometrica* 65(3)。
+
+---
+
+## 5. 多暴露扩展
+
+### `sp.mr_multivariable`——MVMR（Sanderson et al. 2019）
+
+纳入多个相互相关的暴露，估计**直接**效应（固定其他暴露）：
+
+```python
+res = sp.mr_multivariable(
+    snp_df,
+    outcome="beta_y", outcome_se="se_y",
+    exposures=["beta_bmi", "beta_ldl", "beta_sbp"],
+)
+print(res.direct_effect)            # direct α per exposure with SE + CI
+print(res.conditional_f_stats)      # Sanderson-Windmeijer F per exposure
+```
+
+如果任一 `conditional_F < 10`，则该暴露的工具变量在**给定其他
+暴露的条件下**较弱——可考虑将其剔除或寻找更强的 SNP。
+
+参考文献：Sanderson, Davey Smith, Windmeijer, Bowden (2019), *IJE* 48(3)。
+
+### `sp.mr_mediation`——两步 MR
+
+将暴露 → 结果的总效应分解为**直接**路径，以及经由中介变量
+产生的**间接**路径：
+
+```python
+res = sp.mr_mediation(
+    snp_df,
+    beta_exposure="beta_x", se_exposure="se_x",
+    beta_mediator="beta_m", se_mediator="se_m",
+    beta_outcome="beta_y", se_outcome="se_y",
+    exposure_name="BMI", mediator_name="Glucose", outcome_name="T2D",
+)
+print(res.direct_effect, res.indirect_effect, res.proportion_mediated)
+```
+
+底层步骤：第 1 步用 IVW 估计总效应；第 2 步用 MVMR 估计直接
+效应；间接效应 = 总效应 − 直接效应，标准误通过 delta 方法计算。
+
+参考文献：Burgess et al. (2015), *IJE* 44(2)。
+
+### `sp.mr_bma`——贝叶斯模型平均
+
+如果有许多候选相关风险因素，并想了解**哪些因素**会对结果
+产生因果影响，可使用 MR-BMA 遍历所有 2^k 个子集，并报告
+边际纳入概率：
+
+```python
+res = sp.mr_bma(
+    snp_df,
+    outcome="beta_y", outcome_se="se_y",
+    exposures=[f"beta_x{j}" for j in range(10)],
+    prior_inclusion=0.5,
+)
+print(res.marginal_inclusion.sort_values(ascending=False))
+print(res.best_models.head(10))
+```
+
+使用 WLS-BIC 作为模型评分。穷举搜索最多支持 `k ≤ 14`；
+对于更大的 `k`，请使用 `max_model_size` 限制子集大小。
+
+参考文献：Zuber, Colijn, Staley & Burgess (2020), *Nature Comms* 11, 29。
+
+---
+
+## 6. 可视化——`sp.mr_scatter_plot` + `sp.mr_funnel_plot`
+
+```python
+ax = sp.mr_scatter_plot(beta_x, beta_y, se_x, se_y)
+# 绘制 β_Y 与 β_X，并显示 IVW 斜率（红色虚线）和 MR-Egger 直线（绿色）
+
+ax = sp.mr_funnel_plot(beta_x, beta_y, se_y, snp_ids=rsids)
+# Wald ratio vs precision — asymmetry = directional pleiotropy
+```
+
+漏斗图是最快速的多效性可视化诊断：点围绕 IVW 线对称分布 =
+不存在方向性多效性；存在系统性倾斜 = Egger 所关注的多效性。
+
+---
+
+## 决策指南
+
+```
+标准双样本汇总统计量 MR，单一暴露
+  → sp.mendelian_randomization   (runs IVW + Egger + weighted median)
+
+我怀疑存在水平多效性
+  ├─ Directional (all invalid SNPs bias the same way)
+  │    → sp.mr_egger + sp.mr_pleiotropy_egger
+  ├─ Non-directional but < 50% of weight
+  │    → sp.mr_median (optionally penalized)
+  ├─ Majority of SNPs invalid, dispersed
+  │    → sp.mr_mode
+  └─ Unknown — just want outliers removed
+       → sp.mr_presso  (outlier detection + correction)
+
+Check causal direction (is exposure really upstream?)
+  → sp.mr_steiger
+
+检查工具变量强度
+  → sp.mr_f_statistic  (univariate)
+  → sp.mr_multivariable's conditional_f_stats  (multivariable)
+
+Multiple exposures
+  ├─ Correlated, want direct effects
+  │    → sp.mr_multivariable
+  ├─ Exposure → mediator → outcome
+  │    → sp.mr_mediation
+  └─ Many candidates, which are causal?
+       → sp.mr_bma
+
+Visualize
+  → sp.mr_scatter_plot + sp.mr_funnel_plot
+```
+
+---
+
+## 每项 MR 分析都应报告的四项合理性检查
+
+1. **`sp.mr_steiger`**——确认方向。如果 p > 0.05 或
+   `r²_outcome > r²_exposure`，则 MR 方向颠倒；停止分析。
+2. **`sp.mr_f_statistic`**——所有 SNP 的 F 是否都 ≥ 10？如果
+   不是，则很可能存在弱 IV 偏差；请剔除弱 SNP 或收紧 GWAS
+   p 值阈值。
+3. **`sp.mr_heterogeneity`**——I² 是否 < 25%？如果不是，请运行
+   稳健估计器（Egger / 中位数 / 众数），并报告最接近 IVW 的结果。
+4. **`sp.mr_presso`**——全局检验的 p 是否 > 0.05？如果不是，
+   请检查标记出的异常值，并同时报告原始估计和异常值校正估计。
+
+缺少这四项，审稿人就会提出疑问。务必全部运行。
+
+---
+
+## 如何解读估计结果的差异
+
+**IVW 与 Egger**：如果两种斜率不同，且 Egger 截距显著，**应信赖
+Egger**——IVW 会受到方向性多效性偏差的影响，而 Egger 截距正是
+对这种多效性进行建模。如果两种斜率一致，则优先报告 IVW
+（标准误更小）。
+
+**IVW 与中位数**：如果中位数估计比 IVW 更接近零，说明一些 Wald
+比值较大的 SNP 正在驱动 IVW——运行 `leave_one_out` 找出它们。
+
+**Egger 与众数法**：两者都具有稳健性，但 Egger 依赖 InSIDE
+（不可检验），而众数法依赖 ZEMPA（可通过 Hartwig 图检验）。
+如果结果一致，说明分析较为可靠。若两者不一致，请同时报告，
+并结合生物学知识进行解释。
+
+**MVMR 与单变量 MR**：如果单变量效应较大，而 MVMR 直接效应
+接近零，则该暴露表面上的因果效应实际上由 MVMR 中的其他暴露
+所中介——这为作用机制提供了有价值的信息。
+
+---
+
+## 示例：BMI → T2D
+
+```python
+import statspai as sp
+import pandas as pd
+
+snp_df = pd.DataFrame({
+    "rsid":   ["rs1", "rs2", "rs3", "rs4", "rs5", "rs6", "rs7", "rs8"],
+    "beta_x": [ 0.10, 0.15, 0.12, 0.08, 0.20, 0.11, 0.07, 0.18],
+    "se_x":   [0.02,  0.03, 0.02, 0.02, 0.04, 0.02, 0.02, 0.03],
+    "beta_y": [ 0.40, 0.55, 0.48, 0.32, 0.80, 0.44, 0.28, 0.72],
+    "se_y":   [0.08,  0.10, 0.09, 0.08, 0.15, 0.09, 0.08, 0.13],
+})
+
+# 1. 始终先检查方向性
+print(sp.mr_steiger(
+    beta_exposure=snp_df["beta_x"].values,
+    se_exposure=snp_df["se_x"].values,
+    n_exposure=700_000,   # UK Biobank ≈ 700k
+    beta_outcome=snp_df["beta_y"].values,
+    se_outcome=snp_df["se_y"].values,
+    n_outcome=200_000,    # DIAMANTE ≈ 200k
+).summary())
+
+# 2. Instrument strength
+print(sp.mr_f_statistic(
+    snp_df["beta_x"].values, snp_df["se_x"].values, n_samples=700_000,
+).summary())
+
+# 3. Main analysis
+r = sp.mendelian_randomization(
+    data=snp_df,
+    beta_exposure="beta_x", se_exposure="se_x",
+    beta_outcome="beta_y", se_outcome="se_y",
+    exposure_name="BMI", outcome_name="T2D",
+    methods=["ivw", "egger", "weighted_median"],
+)
+print(r.summary())
+
+# 4. Outlier check
+presso = sp.mr_presso(
+    snp_df["beta_x"].values, snp_df["beta_y"].values,
+    snp_df["se_x"].values, snp_df["se_y"].values,
+    n_boot=2000, seed=0,
+)
+print(presso.summary())
+```
+
+在这组示例数据中，IVW 点估计约为 4.0（`β_Y / β_X` 的量级），
+Egger 截距不显著，`I² ≈ 0%`，MR-PRESSO 全局检验 p > 0.05
+→ 未检测到多效性 → 报告 IVW 作为主要结果，并在补充材料中
+报告 Egger 和中位数结果。
+
+---
+
+*适用于 StatsPAI ≥ 1.5.0。所有函数均已注册；可使用
+`sp.describe_function("mr_presso")` 等方法查看函数模式。若要
+通过分发器访问，请参见 `sp.mr(method=...)`。*
+
+<!-- AGENT-BLOCK-START: mr locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 暴露与结果的 SNP 汇总统计量按 SNP 对齐
+- beta_exposure / beta_outcome / se_exposure / se_outcome 数组长度相等
+- 至少 10 个遗传工具变量，IVW / 中位数 / 众数估计才可靠；稳健 Egger 截距至少需要 20 个
+- mvmr 需要 SNP × 暴露关联矩阵
+
+**识别假设**
+- 相关性：SNP 可预测暴露（每个 SNP 或整体的 F 统计量 ≥ 10）
+- 独立性：SNP ⊥ 暴露—结果混杂因素
+- 排除限制：SNP 仅通过暴露影响结果（Egger 需要 InSIDE；中位数要求 ≥ 50% 有效；众数法需满足众数假设）
+- 将 LATE 解释为遗传因素改变的亚群体效应时，需满足单调性
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| Egger 截距 p < 0.05——存在方向性多效性 | `statspai.AssumptionViolation` | 使用加权中位数或众数法估计器；将 Egger 截距 + I² 作为多效性诊断结果报告。 | `sp.mr_median` |
+| Q 统计量拒绝同质性（Cochran's Q p < 0.05） | `statspai.AssumptionWarning` | SNP 之间存在异质性——运行 sp.mr_presso 检测 / 剔除异常值。 | `sp.mr_presso` |
+| Set-F < 10（整体工具变量较弱） | `statspai.AssumptionWarning` | IVW 存在弱 IV 偏差——使用去偏 IVW 或 LAP 类估计器（sp.mr_lap）。 | `sp.mr_lap` |
+| Steiger 检验提示反向因果 | `statspai.IdentificationFailure` | SNP 对结果方差的解释超过对暴露方差的解释——效应方向存疑。 |  |
+
+**替代方法（按优先级排序）**
+- `sp.mr_ivw`
+- `sp.mr_egger`
+- `sp.mr_median`
+- `sp.mr_presso`
+- `sp.mr_multivariable`
+- `sp.iv`
+
+**典型最小样本量 N**：10
+
+<!-- AGENT-BLOCK-END -->

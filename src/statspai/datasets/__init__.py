@@ -22,7 +22,7 @@ Each function returns a ``pd.DataFrame`` with:
 The simulated replicas are designed to match the *structure* and
 *summary statistics* of the original datasets.  For numerical R /
 Stata parity against the original data, see
-``tests/external_parity/PUBLISHED_REFERENCE_VALUES.md``.
+``tests/external_parity/PUBLISHED_REFERENCE_VALUES.qmd``.
 
 Available datasets
 ------------------

@@ -632,7 +632,7 @@ def _audit_proximal(result, data, alpha):
         p_value=None,
         detail=('Linear bridge is the shipped option (Cui et al. 2024). '
                 'Kernel/sieve bridges are on the roadmap.'),
-        remedy=('See docs/ROADMAP.md §1 for non-linear bridge plans; '
+        remedy=('See docs/ROADMAP.qmd §1 for non-linear bridge plans; '
                 'inspect residuals for obvious non-linearity.'),
     ))
 
@@ -671,7 +671,7 @@ def _audit_proximal(result, data, alpha):
             statistic=None,
             p_value=None,
             detail='Multi-W weak-IV statistic is not yet shipped.',
-            remedy='See docs/ROADMAP.md §2 for planned implementation.',
+            remedy='See docs/ROADMAP.qmd §2 for planned implementation.',
         ))
 
     return checks

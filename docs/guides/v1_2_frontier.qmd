@@ -1,0 +1,193 @@
+# v1.2 前沿估计器——文档对齐冲刺
+
+StatsPAI v1.2 弥合了 *Causal-Inference Method Family 万字剖析 v3*（2026-04-20）参考文档与公开 API 之间尚存的差距。本指南介绍 v1.2 中新增的估计器、适用场景，以及它们与 v1.0/v1.1 基础模块之间的关系。
+
+如果只想快速了解，可跳转到[§ 如何选择方法](#when-to-use-which)。
+
+---
+
+## 错位 DID
+
+### `sp.gardner_did` / `sp.did_2stage`——Gardner (2021) 两阶段 DID
+
+与 Stata 的 `did2s` 相似。该两步回归会将第一阶段的不确定性传递到第二阶段推断中：
+
+```python
+import statspai as sp
+r = sp.gardner_did(
+    df, y="wage", group="county", time="year", first_treat="first_treat",
+    event_study=True, horizon=list(range(-5, 6)),
+)
+r.summary()
+# r.model_info["event_study"]["coef"] 为事件研究结果字典
+```
+
+**已有 `sp.did_imputation` 时，为何还要使用此方法？** Gardner 和 BJS 的目标都是同一个 ATT，但 Gardner 的回归框架更容易扩展到事件研究分解、协变量交互项和非平衡面板。在合成面板上，两者结果相差约 2%。如果需要事件研究或添加交互项，请选 Gardner；如果需要效率证明且无需自定义，请选 BJS。
+
+**引文**：Gardner, J. (2021). arXiv:2207.05943。Butts & Gardner
+(2022), *R Journal* 14(3)。
+
+### `sp.harvest_did`——MIT/NBER WP 34550 (2025) 聚合框架
+
+该方法收集错位面板所隐含的**所有**有效 2×2 DID 比较，并通过逆精度加权将其合并。如果你希望一次调用就获得标准误计算正确的总体估计，可将其视为简化版 Callaway-Sant'Anna。
+
+```python
+r = sp.harvest_did(
+    df, outcome="y", unit="id", time="t", cohort="first_treat",
+)
+# r.estimate、r.se、r.ci 等常用结果属性
+```
+
+---
+
+## 双重机器学习
+
+### `sp.dml_model_averaging`——Ahrens 等 (2025, *JAE*)
+
+标准的 `sp.dml` 会选择一个干扰项学习器，并假定其设定正确。模型平均会使用一组候选学习器（默认包括 `Lasso`、`Ridge`、`RandomForest`、`GBM`）拟合 DML，并报告风险加权的 θ 估计均值及经协方差调整的标准误：
+
+```python
+r = sp.dml_model_averaging(
+    df, y="y", treat="d",
+    covariates=[f"x{j}" for j in range(p)],
+    weight_rule="inverse_risk",    # 也可选 "equal" / "single_best"
+)
+print(r.model_info["weights"])
+print(r.model_info["theta_k"])
+```
+
+**三种权重规则：**
+
+- `"inverse_risk"`（默认）——w_k ∝ 1 / MSE_k
+- `"equal"`——1/K
+- `"single_best"`——全部权重赋给风险最低的候选模型
+
+当因果估计值随干扰项学习器的更换而大幅波动，且你希望采用有原则的集成方法而非随意选择时，可使用此方法。引文：Ahrens, Hansen, Schaffer & Wiemann（2025），
+DOI `10.1002/jae.3103`。
+
+---
+
+## 非参数 IV
+
+### `sp.kernel_iv`——Lob 等 (2025)
+
+采用核平滑的 IV 回归，并针对结构函数 `h*(d) = E[Y | do(D=d)]` 提供**一致**的 wild-bootstrap 置信带：
+
+```python
+r = sp.kernel_iv(df, y="y", treat="d", instrument="z", n_boot=200)
+r.summary()                          # grid, point estimates, UCB
+```
+
+当处理效应可能随 `d` 呈非线性变化，且单个点估计不足以满足需求时可使用——一致置信区间让你无需逐点检验，就能拒绝“效应处处为零”的假设。引文：
+arXiv:2511.21603。
+
+### `sp.continuous_iv_late`——Xie 等 (2025)
+
+对于连续工具变量，使用分位数分箱的 Wald 估计量，估计**最大服从者群体**上的 LATE。这比二元 IV 特例更接近 Angrist-Imbens LATE 的思想：
+
+```python
+r = sp.continuous_iv_late(
+    df, y="y", treat="d", instrument="z", n_quantiles=5,
+)
+```
+
+引文：arXiv:2504.03063。
+
+---
+
+## TMLE
+
+### `sp.hal_tmle`——Qian & van der Laan (2025)
+
+使用**高自适应 Lasso**干扰项学习器的 TMLE。HAL 是一种非参数筛估计器，可近似有界变差的 càdlàg 函数；与通用随机森林干扰项相比，它能使 TMLE 的有限样本覆盖率更稳定：
+
+```python
+r = sp.hal_tmle(
+    df, y="y", treat="d", covariates=["x1","x2","x3","x4"],
+    variant="delta",            # or "projection" for tangent-space shrinkage
+    max_anchors_per_col=40,
+)
+```
+
+在 `n = 400` 且存在非平滑异质性的合成数据上，HAL-TMLE 的 ATE 估计与真实值相差约 3%；而使用相同随机种子时，通用 TMLE 的偏差可能达到 10–15%。引文：arXiv:2506.17214。
+
+---
+
+## 合成控制
+
+### `sp.synth_survival`——Agarwal & Shah (2025)
+
+合成生存控制：在互补对数-对数（`cloglog`）尺度上构造供体凸组合，以匹配处理组处理前的 Kaplan-Meier 曲线，然后向前投影，并使用安慰剂置换一致置信带报告生存差距。
+
+```python
+# df：长格式面板，每个（单位、时间）组合占一行，并包含预先计算的 KM 生存率
+r = sp.synth_survival(
+    df, unit="arm", time="month",
+    survival="km_est",       # Kaplan-Meier 生存率 S_i(t)
+    treated="tr",            # 布尔类型列或明确指定的单位名称
+    treat_time=6,
+)
+r.summary()                     # 前 5 个供体权重、处理后差距和处理前 RMSE
+```
+
+引文：arXiv:2511.14133。
+
+---
+
+## RDD 别名（现有方法的易读名称）
+
+v3 文档中多次使用“地理 RD”“多断点 RD”“边界 RD”等术语——但 R/Stata 领域通常使用 `rdms`、`rdmc`、`rd2d`。现在我们同时提供两种命名方式：
+
+| v3 文档术语     | R/Stata 名称   | 新别名           |
+|----------------------|----------------|---------------------|
+| 多断点 RD      | `rdmc`         | `sp.multi_cutoff_rd` |
+| 地理 RD      | `rdms`         | `sp.geographic_rd`  |
+| 边界 RD（2D）     | `rd2d`         | `sp.boundary_rd`    |
+| 多评分 RD       | `rd_multi_score` | `sp.multi_score_rd` |
+
+---
+
+## v1.2 还新增了这些功能（维护者 v3 工作）
+
+这些功能也包含在同一版本中，并已接入 `sp.*`：
+
+- `sp.shift_share_political`——Park & Xu (arXiv:2603.00135, 2026) Bartik IV，专为政治学面板数据设计，提供 Rotemberg 权重 Top-K 分解和份额平衡诊断。
+- `sp.bcf_ordinal`——针对剂量等有序（多水平）处理的 BCF。将 Hahn-Murray-Carvalho (2020) 扩展到 `T ∈ {0, 1, ..., K}`。
+- `sp.bcf_factor_exposure`——采用因子暴露映射的 BCF，适用于高维暴露向量（饮食、污染物、多基因因素）。
+- `sp.causal_mas`——用于因果发现的多代理 LLM 框架；针对一组变量运行提议者 / 批评者 / 领域专家循环。
+- `sp.evidence_without_injustice`（位于 `statspai.fairness.evidence_test`）——用于法律 / 证据采信场景的反事实公平性检验。
+- `sp.causal_kalman`（位于 `statspai.assimilation.kalman`）——对一系列因果估计进行贝叶斯同化，并显式建模过程方差。
+
+---
+
+## 如何选择方法
+
+```
+需要错位 DID 的 ATT？
+  +-- 小型面板，只需一个总体估计值               -> sp.harvest_did
+  +-- 需要事件研究 + 协变量交互项                 -> sp.gardner_did
+  +-- 标准四种设计比较 + ATT(g,t)                 -> sp.callaway_santanna
+  +-- 避免双向固定效应（TWFE）分解问题            -> sp.did_imputation
+
+需要 DML，但不确定该选哪种机器学习模型？
+  +-- 选取 4 种模型，由数据决定                   -> sp.dml_model_averaging
+
+工具变量是连续变量？
+  +-- 需要结构函数 h*(d) 的一致置信区间            -> sp.kernel_iv
+  +-- 需要最大服从者群体上的 LATE                  -> sp.continuous_iv_late
+
+干扰参数复杂，且需要半参数有效估计？
+  +-- 通用情形                                      -> sp.tmle
+  +-- 非平滑异质性、小样本                          -> sp.hal_tmle
+
+单个处理单位的合成控制，结果为生存数据？
+  +-- 基于 Kaplan-Meier 曲线匹配供体               -> sp.synth_survival
+
+地理 RD / 多断点 RD？
+  +-- 一维运行变量、多个阈值                        -> sp.multi_cutoff_rd
+  +-- 多评分（由多条规则决定资格）                  -> sp.multi_score_rd
+  +-- 二维运行变量（经纬度）                        -> sp.boundary_rd
+```
+
+以上每种方法都已接入 `sp.list_functions()` / `sp.describe_function()` /
+`sp.function_schema()`，因此 LLM 代理无需阅读源码即可发现并调用。

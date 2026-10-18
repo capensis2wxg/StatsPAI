@@ -1,0 +1,191 @@
+# 如何选择匹配 / 加权估计量
+
+当你的研究设计依赖于基于可观测变量的选择（CIA / 无混杂性），
+且处理变量为二元变量时，StatsPAI 提供了 7 种以上的估计量。
+以下说明如何选择。
+
+## 0. 快速决策流程图
+
+```
+协变量是否为高维（p > 20）？
+  是 -> 双重机器学习（sp.dml）或元学习器（sp.S_Learner 等）
+  否 -> 继续
+
+目标是否为 ATT（处理组平均效应）？
+  是 -> sp.ebalance（熵平衡）或 sp.match(estimand='ATT')
+  否 -> 继续
+
+目标是否为 ATE（总体平均效应）？
+  是 -> sp.cbps(estimand='ATE') 或 sp.aipw
+  否 -> 继续
+
+是否需要重叠加权效应（避免外推）？
+  是 -> sp.overlap_weights（ATO）
+  否 -> 请重新考虑：你真正关心的估计目标是什么？
+```
+
+## 1. 熵平衡（ebal）——ATT 的“开箱即用”默认方法
+
+Hainmueller（2012）。通过重新加权实现协变量精确平衡，无需对倾向得分建模。
+
+```python
+r = sp.ebalance(df, y='y', treat='d',
+                covariates=['X1', 'X2', 'X3'],
+                moments=1)  # 平衡均值；moments=2 时也平衡方差
+```
+
+**优点：**无需指定 PSM 模型；通过构造实现精确平衡；不存在 King-Nielsen 问题。
+**缺点：**仅针对 ATT；可能对极端权重敏感。
+
+## 2. 最近邻匹配
+
+请注意：King & Nielsen（2019）指出，基于 PSM 的最近邻匹配可能会**加剧**不平衡。优先考虑 Mahalanobis 距离或粗化精确匹配（CEM）：
+
+```python
+r = sp.match(df, y='y', treat='d', covariates=[...],
+             distance='mahalanobis',  # 不要使用 'propensity'
+             method='nearest', n_matches=3)
+```
+
+## 3. 协变量平衡倾向得分（CBPS）
+
+Imai-Ratkovic（2014）。拟合倾向得分时直接平衡协变量，而非最大化似然。
+
+```python
+r = sp.cbps(df, y='y', treat='d', covariates=[...],
+            estimand='ATE',  # 也可选 'ATT'
+            variant='over')   # 推荐使用 'over'（过度识别）
+```
+
+与 IPW 相比，对倾向得分模型设定错误更稳健。
+
+## 4. 重叠权重（ATO）
+
+Li-Morgan-Zaslavsky（2018）。根据每个单位接受“另一种”处理的倾向对其加权，从而估计**重叠总体**的效应——即两种处理都具有合理可能性的子群体中的效应。
+
+```python
+r = sp.overlap_weights(df, y='y', treat='d', covariates=[...],
+                       estimand='ATO')
+```
+
+避免倾向得分接近 0 或 1 时出现极端权重。
+
+## 5. 双重稳健估计量
+
+AIPW 结合了结果模型和倾向得分模型——**任一模型**设定正确即可保证估计一致。
+
+```python
+r = sp.aipw(df, y='y', treat='d', covariates=[...])
+```
+
+对于高维协变量，请使用 Double ML（Chernozhukov 等，2018）：
+
+```python
+r = sp.dml(df, y='y', treat='d', covariates=[...],
+           ml_model='lasso',         # 也可选 'rf' 或 'xgb'
+           cross_fitting_folds=5)
+```
+
+对于含有大量控制变量的观测数据 ATE，DML 是当前先进的方法。
+
+## 6. 元学习器（用于异质性效应）
+
+如果你想估计的不只是 ATE，还包括 CATE 函数 τ(X)：
+
+```python
+from statspai.metalearners import S_Learner, T_Learner, X_Learner, DR_Learner
+
+dr = DR_Learner(outcome_model='rf', ps_model='lr')
+dr.fit(df[cov_cols], df['d'], df['y'])
+cate = dr.predict(df_new[cov_cols])
+```
+
+诊断方法（CATE 校准、策略价值）请参阅[元学习器指南](../reference/causal.qmd)。
+
+## 7. 常见错误
+
+| 错误 | 修正方法 |
+|--------------------------------------------------|-----------------------------------------------|
+| 在协变量中纳入处理后变量 | 删除它们——切勿对处理的结果进行条件化 |
+| 将碰撞变量作为协变量纳入 | 使用 DAG（`sp.DAG`）检查调整集 |
+| 未检查重叠就报告结果 | 始终绘制倾向得分分布图（`sp.psplot`） |
+| 报告 ATE，实际计算的却是 ATT | 检查调用或结果中的 `estimand` |
+| 使用 PSM 最近邻匹配（King-Nielsen 2019） | 使用 `distance='mahalanobis'` 或 `method='cem'` |
+| 不截尾极端权重 | 使用 `trim=0.01` 或重叠权重 |
+
+## 8. 必须进行的诊断
+
+```python
+r = sp.ebalance(df, y='y', treat='d', covariates=[...])
+
+# 1. 检查加权前后的平衡性
+sp.love_plot(r)      # 加权前后的标准化均值差（SMD）
+sp.ps_balance(r)     # 正式的平衡性统计量
+
+# 2. Overlap / common support
+sp.overlap_plot(r)
+sp.trimming(r, threshold=0.01)
+
+# 3. Sensitivity to unobserved confounding
+sp.sensemakr(r, benchmark_covariates=['X1'])  # Cinelli-Hazlett 方法
+sp.oster_bounds(r)                             # Oster（2019）界限
+sp.evalue(r)                                   # VanderWeele-Ding E 值
+```
+
+## 9. 阅读输出
+
+```python
+r.estimate           # 点估计（ATT / ATE / ATO）
+r.se                 # 自助法或解析标准误
+r.ci                 # 置信区间
+r.tidy()             # 主结果行；若有详细信息则包含单位权重
+r.glance()           # 方法、nobs、estimand、ESS（有效样本量）
+r.detail             # 如存在，则为含标准化均值差（SMD）的平衡表
+```
+
+## 10. 估计目标速查表
+
+| 估计目标 | 含义 | 推荐估计量 |
+|----------|-------------------------------------|----------------------------|
+| ATT      | 处理组的平均效应 | `ebalance`, `match(ATT)`   |
+| ATE      | 总体平均效应 | `cbps(ATE)`, `aipw`, `dml` |
+| ATO      | 重叠总体的效应 | `overlap_weights`          |
+| ATC      | 对照组的平均效应 | `match(estimand='ATC')`    |
+| CATE(x)  | 给定协变量 X=x 时的条件效应 | 元学习器、因果森林 |
+| LATE     | 服从者的效应 | IV（而非匹配） |
+
+<!-- AGENT-BLOCK-START: match locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 处理变量为二元变量 0/1
+- 协变量是处理前变量（时间上早于 D）
+- 按照所选方法，处理组中每个单位都有足够的对照单位（k:1 匹配）
+- 协变量为数值型；分类变量需进行独热编码，或通过卡尺 / Mahalanobis 方法处理
+
+**识别假设**
+- 无混杂性 / CIA：Y(d) ⊥ D | X
+- 重叠 / 共同支持：处理组 X 值处于对照组 X 值的支持范围内
+- SUTVA：匹配单位之间不存在干扰
+- 在查看结果前选定协变量（不得对处理后变量进行条件化）
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 匹配后协变量仍不平衡（max \|SMD\| > 0.1） | `statspai.AssumptionViolation` | 使用更严格的卡尺重新匹配、添加交互项，或改用 sp.ebalance（熵平衡）。 | `sp.ebalance` |
+| 倾向得分重叠较差（密度图显示处理组质量集中在对照组稀疏区域） | `statspai.AssumptionViolation` | 应用 sp.trimming（Crump 2009），或将估计目标重新定义为重叠区域。 | `sp.trimming` |
+| 每个处理组单位对应的匹配对照单位太少 | `statspai.DataInsufficient` | 放宽卡尺，允许重复匹配，或使用熵平衡 / 重叠权重。 | `sp.ebalance` |
+| 结果对匹配设定高度敏感 | `statspai.AssumptionWarning` | 报告 sp.rosenbaum_bounds（对未观测混杂的敏感性），并比较多种匹配方法。 | `sp.rosenbaum_bounds` |
+
+**替代方法（按优先级排序）**
+- `sp.ebalance`
+- `sp.cbps`
+- `sp.optimal_match`
+- `sp.sbw`
+- `sp.ipw`
+
+**典型最小样本量 N**：200
+
+<!-- AGENT-BLOCK-END -->

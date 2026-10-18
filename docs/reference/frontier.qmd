@@ -1,0 +1,66 @@
+# 随机前沿分析
+
+`statspai.frontier` 提供参数化随机前沿分析，与 Stata 的
+`frontier` / `xtfrontier` 及 R 的 `frontier` / `sfaR` 保持兼容，并包含多项扩展。
+
+> **⚠️ 关键正确性修复（v0.9.3）。** 此前版本的 Jondrow 后验计算存在符号错误，导致效率分数系统性偏差；指数分布路径还会返回 NaN。**请重新运行此前的随机前沿分析。**
+
+## 横截面分析 — `sp.frontier`
+
+```python
+r = sp.frontier(
+    df, y='log_output', x=['log_k', 'log_l'],
+    dist='half-normal',            # 也可选 'exponential' 或 'truncated-normal'
+    cost=False,                    # 生产前沿
+    usigma=['w1', 'w2'],           # 异方差 σ_u（CFG 1995）
+    vsigma=['r1'],                 # 异方差 σ_v（Wang 2002）
+    emean=['z1', 'z2'],            # BC95 无效率决定因素
+    vce='robust',                  # 'opg' | 'robust' | 'cluster' | 'bootstrap'
+    cluster='firm_id',
+)
+r.summary()
+r.efficiency(method='bc')          # Battese-Coelli（1988）：E[exp(-u)|ε]
+r.efficiency(method='jlms')        # Jondrow 等（1982）：exp(-E[u|ε])
+r.efficiency_ci(alpha=0.05, B=500) # 参数自助法置信区间
+r.lr_test_no_inefficiency()        # Kodde-Palm 混合 χ̄² 单侧似然比检验
+```
+
+## 面板分析 — `sp.xtfrontier`
+
+```python
+r = sp.xtfrontier(
+    df, y='log_output', x=['log_k', 'log_l'], i='firm', t='year',
+    model='ti',          # Pitt-Lee（1981）：时间不变
+    # model='tvd',       # Battese-Coelli（1992）：时间衰减 u_it = exp(-η(t-T_i))·u_i
+    # model='bc95',      # Battese-Coelli（1995）：包含 z_it' δ
+    # model='tfe',       # Greene（2005）：真实固定效应
+    bias_correct=True,   # Dhaene-Jochmans（2015）分割面板 Jackknife（仅适用于 TFE）
+    dist='truncated-normal',
+)
+```
+
+## 扩展前沿模型
+
+| 函数 | 方法 |
+| --- | --- |
+| `sp.zisf(df, ...)` | 零无效率 SFA 混合模型（Kumbhakar-Parmeter-Tsionas，2013） |
+| `sp.lcsf(df, ..., n_classes=2)` | 潜在类别 SFA（Orea-Kumbhakar，2004 / Greene，2005） |
+| `sp.malmquist(df, ..., period_col='year')` | Färe-Grosskopf-Lindgren-Roos（1994）Malmquist 全要素生产率：M = EC × TC |
+| `sp.translog_design(df, x=[...])` | Cobb-Douglas → Translog 设计矩阵辅助函数 |
+| `sp.metafrontier(group_fits)` | 跨组元前沿（Battese-Rao-O'Donnell，2004） |
+
+## 估计后辅助函数
+
+```python
+sp.te_summary(r)                         # Stata 风格的技术效率描述统计表
+sp.te_rank(r, with_ci=True, B=500)       # 效率排名及自助法置信区间
+r.predict(new_data, type='frontier')     # 仅预测前沿值
+r.marginal_effects('emean')              # RH（1999）边际效应
+r.returns_to_scale()                     # 弹性之和
+```
+
+## 验证
+
+33 项横截面与面板测试覆盖三种分布下的参数恢复、成本与生产模型的符号处理、异方差 σ_u/σ_v、BC95 决定因素、LR 检验、自助法置信区间结构、Pitt-Lee / BC92 /
+BC95 / TFE / TRE 面板参数恢复，以及蒙特卡洛密度积分
+（$\int f(\epsilon)\,d\epsilon = 1$）的核函数合理性检查。

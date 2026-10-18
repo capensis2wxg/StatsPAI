@@ -1,0 +1,71 @@
+# 智能工作流
+
+`statspai.smart` 提供估计器推荐、比较、假设审计和后验验证。
+
+## `sp.recommend` — 推荐估计器
+
+```python
+rec = sp.recommend(
+    df,
+    outcome='earnings',
+    treatment='training',
+    covariates=['age', 'educ', 'prior_earnings'],
+    design='observational',          # 'rct' | 'observational' | 'did' | 'rd' | 'iv' | 'synth'
+    verify=True,                     # run posterior verification (v0.9.3)
+)
+rec.summary()                        # ranked estimators with rationale
+rec.recommended_method
+rec.plot('verify_radar')             # stability breakdown per method
+rec.to_latex()
+```
+
+## `sp.compare_estimators` — 比较估计器
+
+在相同数据上运行多个估计器，并绘制系数稳定性森林图：
+
+```python
+cmp = sp.compare_estimators(
+    df, outcome='y', treatment='d', covariates=[...],
+    methods=['ols', 'psm', 'dml', 'aipw', 'tmle', 'causal_forest'],
+)
+cmp.plot_forest()
+cmp.table()
+```
+
+## `sp.assumption_audit` — 假设审计
+
+一键审计最常见的识别假设：
+
+```python
+audit = sp.assumption_audit(df, outcome='y', treatment='d', covariates=[...])
+audit.overlap                        # propensity score overlap diagnostic
+audit.covariate_balance              # Love plot of standardised diffs
+audit.placebo_outcomes               # pre-treatment placebos
+audit.instrument_strength            # first-stage F if IV specified
+audit.parallel_trends                # pre-trend placebo if DID
+audit.summary()
+```
+
+## `sp.verify` / `sp.verify_benchmark`（v0.9.3）
+
+对任意 `sp.recommend()` 输出执行后验验证，并将三种信号汇总为
+`verify_score ∈ [0, 100]`：
+
+```python
+v = sp.verify(
+    rec,
+    n_boot=500,
+    n_subsample=100,
+    subsample_frac=0.8,
+    n_placebo=20,
+)
+
+v.verify_score                       # 0–100 composite
+v.components                         # dict: bootstrap / placebo / subsample
+v.failures                           # methods that failed verification
+v.plot('radar')                      # visual per-method breakdown
+```
+
+校准说明：在干净的 DGP 上，排名第一的方法通常取得 85–95 的
+`verify_score`（RD 约为 74，原因是局部多项式自助法方差）。
+`sp.verify_benchmark(...)` 会在合成 DGP 上运行验证，以校准何种分数阈值可视为“可信”。

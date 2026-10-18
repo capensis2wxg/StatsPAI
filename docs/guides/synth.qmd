@@ -1,0 +1,181 @@
+# 合成控制——20 种方法，一个工具包
+
+StatsPAI 汇集了目前所有语言中最全面的合成控制工具包：20 种估计器、6 种推断策略，以及自动比较、功效分析、敏感性诊断和一键式报告等研究工作流。
+
+## 快速开始
+
+```python
+import statspai as sp
+
+# 加载加利福尼亚 Proposition 99 数据集（Abadie 等，2010 年研究所用）
+df = sp.synth.california_tobacco()
+
+# Classic SCM (Abadie, Diamond & Hainmueller 2010)
+res = sp.synth(
+    df, outcome='cigsale', unit='state', time='year',
+    treated_unit='California', treatment_time=1989,
+    method='classic',
+)
+print(res.summary())
+```
+
+`sp.synth()` 是统一调度器——只需切换 `method=`，即可使用相同的 API 和返回类型运行 20 种变体中的任意一种。
+
+## 20 种方法
+
+| `method=` | 论文 | 适用场景 |
+|---|---|---|
+| `classic` | Abadie, Diamond & Hainmueller (2010) | 基准方法。一个处理单位、处理前时期较少、供体拟合良好。 |
+| `penalized` / `ridge` | Doudchenko & Imbens (2016) | 经典权重不稳定时使用；岭回归可改善外推。 |
+| `demeaned` | Ferman & Pinto (2021) | 单位固定效应很大时，先去均值再匹配。 |
+| `unconstrained` / `elastic_net` | Doudchenko & Imbens (2016) | 理论上允许负权重或无界权重时使用。 |
+| `augmented` / `ascm` | Ben-Michael, Feller & Rothstein (2021) | 不存在精确处理前拟合时使用；对经典 SCM 进行偏差校正。 |
+| `sdid` | Arkhangelsky 等 (2021) | 结合 DID 和 SCM；对效应异质性稳健。 |
+| `factor` / `gsynth` | Xu (2017) | 多个处理单位 + 交互固定效应。 |
+| `staggered` | Ben-Michael, Feller & Rothstein (2022) | 处理开始时间错位。 |
+| `mc` | Athey 等 (2021) | 存在许多缺失单元；使用核范数进行矩阵补全。 |
+| `discos` | Gunsilius (2023) | 处理影响整个分布而非仅均值时使用。 |
+| `multi_outcome` | Sun (2023) | 存在多个相关结果；借助这些结果间的信息。 |
+| `scpi` | Cattaneo, Feng & Titiunik (2021) | 需要诚实预测区间，而非安慰剂 p 值。 |
+| `bayesian` | Vives & Martinez (2024) | 需要完整后验分布；采用 Dirichlet 先验 + MCMC 可信区间。 |
+| `bsts` / `causal_impact` | Brodersen 等 (2015) | 具有水平 / 趋势的结构时间序列；即 Google CausalImpact 模型。 |
+| `penscm` | Abadie & L'Hour (2021) | 供体相似度高；成对差异惩罚项有助于提高可解释性。 |
+| `fdid` | Li (2024) | 需要一组供体子集而非权重——便于沟通。 |
+| `cluster` | Rho (2024) | 供体池较大；先聚类，再在最佳聚类内运行 SCM。 |
+| `sparse` / `lasso` | Amjad, Shah & Shen (2018) | 供体维度高；由 L1 选择少数供体。 |
+| `kernel` | RKHS / MMD 匹配 | 供体之间存在非线性关系。 |
+| `kernel_ridge` | 核岭回归 | 非线性、无约束、正则化。 |
+
+## 推断策略
+
+| 策略 | 调用方式 | 适用情况 |
+|---|---|---|
+| 安慰剂（空间内） | 默认 | 始终可用；供体池可交换时适用。 |
+| 共形 | `method='conformal'` 或 `conformal_synth()` | 需要有限样本覆盖率保证时（Chernozhukov 等, 2021）。 |
+| 预测区间 | `scpi()` | 同时考虑参数、残差和设计不确定性。 |
+| Bootstrap / Jackknife | SDID 内部实现 | 对 SDID 进行推断。 |
+| 贝叶斯后验 | `bayesian_synth()` | 基于 MCMC 获取完整可信区间。 |
+| BSTS 后验 | `bsts_synth()` | Kalman 滤波 / 平滑器后验抽样。 |
+
+## 研究工作流
+
+### 一次运行所有方法
+
+```python
+comp = sp.synth_compare(df, outcome='cigsale', unit='state', time='year',
+                        treated_unit='California', treatment_time=1989)
+comp.plot()                # overlay all counterfactuals
+comp.summary_table()       # ATT, pre-RMSPE, p-value per method
+best = sp.synth_recommend(comp)   # auto-pick best by pre-fit + robustness
+```
+
+### 提前进行功效分析
+
+```python
+power = sp.synth_power(df, outcome='cigsale', unit='state', time='year',
+                       treated_unit='California', treatment_time=1989,
+                       effect_sizes=[2, 5, 10, 15, 20], n_sims=500)
+sp.synth_power_plot(power)
+
+# 检验效能为 80% 时的最小可检测效应是多少？
+mde = sp.synth_mde(df, outcome='cigsale', ..., target_power=0.80)
+```
+
+### 敏感性分析套件
+
+```python
+sens = sp.synth_sensitivity(res)            # one-shot: LOO + time + donor + RMSPE
+sp.synth_sensitivity_plot(sens)
+
+# or individual components
+sp.synth_loo(res)                # leave-one-donor-out
+sp.synth_time_placebo(res)       # backdate the treatment time
+sp.synth_donor_sensitivity(res)  # random donor-pool subsampling
+sp.synth_rmspe_filter(res)       # drop high-residual placebos
+```
+
+### 一键生成发表用报告
+
+```python
+sp.synth_report(res, format='markdown')   # 'text' | 'markdown' | 'latex'
+sp.synth_report_to_file(res, 'analysis.md')
+```
+
+生成内容包括：摘要、方法、权重、安慰剂分布、敏感性分析和参考文献——可直接粘贴到论文或附录中。
+
+## 经典数据集
+
+StatsPAI 将三个经典 SCM 数据集作为逼真模拟数据提供（结构与已发表数据一致；用于教学和单元测试）：
+
+```python
+sp.synth.california_tobacco()      # Prop 99 (1989)
+sp.synth.german_reunification()    # Abadie, Diamond & Hainmueller (2015)
+sp.synth.basque_terrorism()        # Abadie & Gardeazabal (2003)
+```
+
+如需使用已发表的真实数据，请使用 R 包 `causaldata` 或作者提供的复现文件——StatsPAI 不会重新分发受版权保护的数据。
+
+## 选择方法
+
+如果不确定该用哪种方法，请运行 `sp.synth_compare(...)` 并检查：
+
+1. **处理前 RMSPE**——越低表示拟合越好。
+2. **不同方法间的一致性**——如果 classic/ASCM/SDID/MC 得出相同结果，则结果稳健。如果结果不一致，请查明原因。
+3. **安慰剂分布**——处理单位的效应相较于安慰剂是否极端？
+
+然后运行 `sp.synth_sensitivity(best)` 对最佳方法进行压力测试。
+
+## 参考文献
+
+- Abadie, Diamond & Hainmueller (2010). *JASA* 105(490).
+- Abadie & L'Hour (2021). *JASA* 116(536).
+- Amjad, Shah & Shen (2018). *JMLR* 19(22).
+- Arkhangelsky, Athey, Hirshberg, Imbens & Wager (2021). *AER* 111(12).
+- Athey, Bayati, Doudchenko, Imbens & Khosravi (2021). *JASA* 116(536).
+- Ben-Michael, Feller & Rothstein (2021). *JASA* 116(536).
+- Brodersen, Gallusser, Koehler, Remy & Scott (2015). *AOAS* 9(1).
+- Cattaneo, Feng & Titiunik (2021). *JASA* 116(536).
+- Chernozhukov, Wüthrich & Zhu (2021). *JASA* 116(536).
+- Doudchenko & Imbens (2016). NBER WP 22791.
+- Ferman & Pinto (2021). *Quantitative Economics* 12(4).
+- Gunsilius (2023). *Econometrica* 91(3).
+- Li (2024). Forward Difference-in-Differences.
+- Rho (2024). Cluster Synthetic Control Methods.
+- Sun (2023). *ReStat* forthcoming.
+- Vives & Martinez (2024). *JCGS* forthcoming.
+- Xu (2017). *Political Analysis* 25(1).
+
+<!-- AGENT-BLOCK-START: synth locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 长格式面板数据（单位 × 时间 × 结果）
+- 单个处理单位（经典方法）或处理时点列（错位处理）
+- ≥ 10 个具有相似处理前轨迹的供体（未处理）单位
+- ≥ 10 个处理前时期（更少时，某一年可能会获得过大的权重）
+
+**识别假设**
+- 处理效应由供体权重隐含的反事实识别
+- 处理单位对供体单位没有溢出效应（SUTVA）
+- 供体池包含其结果有可能跟踪处理单位反事实结果的单位
+- 为进行安慰剂推断，处理前拟合（RMSPE）相对于处理后效应较小
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| 处理前 RMSPE > 处理后效应 | `AssumptionWarning` | 处理前拟合不佳——切换到 method='demeaned'/'augmented' 或扩大供体池。 | `sp.synth` |
+| 存在明显差距，但安慰剂 p 值 ≥ 0.1 | `AssumptionWarning` | 使用 inference='conformal'（在较弱假设下有效），或报告安慰剂统计量的排序。 | `sp.synth` |
+| 所有权重都集中在一个供体上 | `AssumptionWarning` | 存在插值偏差风险——检查 method='elastic_net' 或增强 SCM。 | `sp.synth` |
+| 处理单位位于供体凸包之外 | `IdentificationFailure` | 需要外推——使用 method='unconstrained' 或 'augmented'。 | `sp.synth` |
+
+**备选方案（按优先级排序）**
+- `sp.sdid`
+- `sp.did`
+- `sp.matrix_completion`
+- `sp.causal_impact`
+
+**典型最小 N**：10
+
+<!-- AGENT-BLOCK-END -->

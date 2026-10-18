@@ -1,0 +1,99 @@
+# `cs_report()`——一键报告卡
+
+`sp.cs_report()` 在同一个随机种子下运行完整的 Callaway–Sant'Anna 工作流，并将输出打包成 `CSReport` 数据类，支持格式化打印、绘图和导出。
+
+## 最简示例
+
+```python
+import statspai as sp
+
+rpt = sp.cs_report(
+    df,
+    y='y', g='g', t='t', i='id',
+    n_boot=500,
+    random_state=0,
+    verbose=True,              # prints the report to stdout
+)
+```
+
+## 结构化字段
+
+```python
+rpt.overall      # dict: overall ATT, SE, CI, p
+rpt.simple       # DataFrame: simple aggregation
+rpt.dynamic      # DataFrame: event study with uniform bands
+rpt.group        # DataFrame: per-cohort θ(g)
+rpt.calendar     # DataFrame: per-calendar-time θ(t)
+rpt.pretrend     # dict: χ² pre-trend Wald test
+rpt.breakdown    # DataFrame: R-R breakdown M* per post event time
+rpt.meta         # dict: run metadata (n_units, estimator, …)
+```
+
+## 导出格式
+
+```python
+rpt.to_text()         # fixed-width ASCII
+rpt.to_markdown()     # GitHub-flavoured Markdown (floatfmt configurable)
+rpt.to_latex()        # booktabs LaTeX fragment (no jinja2 needed)
+rpt.to_excel('out.xlsx')  # six-sheet workbook
+rpt.plot()            # 2×2 summary figure via matplotlib
+```
+
+### 一键打包导出
+
+传入 `save_to='prefix'`，即可一次性输出所有格式：
+
+```python
+sp.cs_report(
+    df, y='y', g='g', t='t', i='id',
+    n_boot=500, random_state=0,
+    save_to='~/studies/cs_v1',
+)
+# writes:
+# ~/studies/cs_v1.txt   .md   .tex   .xlsx   .png
+```
+
+如果父目录不存在，会自动创建；可选依赖项（`openpyxl`、`matplotlib`）缺失时会静默跳过。
+
+## 使用预先拟合的结果
+
+如果你已经有 `callaway_santanna()` 的结果，可以跳过重新估计：
+
+```python
+cs = sp.callaway_santanna(df, ...)
+rpt = sp.cs_report(cs, n_boot=500, random_state=0)
+```
+
+<!-- AGENT-BLOCK-START: callaway_santanna locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 面板数据包含单位 × 时间 × 结果
+- g 列为整数：首次处理期；从未处理的单位记为 0
+- 至少有一个从未处理组或较晚处理组作为对照
+- 每个队列至少有 ≥ 2 个处理前时期
+
+**识别假设**
+- 给定 X 的平行趋势（如果提供协变量）
+- 无预期效应（或使用 anticipation= 参数进行调整）
+- 重叠：每个队列的倾向得分均为正
+- SUTVA
+
+**故障模式 → 恢复方法**
+
+| 症状 | 异常 | 补救措施 | 接下来尝试 |
+| --- | --- | --- | --- |
+| 聚合 ATT(g,t) 的前趋势检验拒绝原假设 | `AssumptionViolation` | 使用 sp.sensitivity_rr 进行诚实置信区间分析，或添加协变量以满足条件平行趋势。 | `sp.sensitivity_rr` |
+| 队列仅有一个单位——变化不足 | `DataInsufficient` | 合并小队列或删除；检查 sp.diagnose_result。 |  |
+| 所有单位均在同一时间接受处理（没有错开） | `MethodIncompatibility` | 退回使用 sp.did(method='2x2') 进行 2x2 DID。 | `sp.did` |
+
+**替代方法（按优先级排序）**
+- `sp.sun_abraham`
+- `sp.did_imputation`
+- `sp.sdid`
+- `sp.did`
+
+**典型最小样本量 N**：50
+
+<!-- AGENT-BLOCK-END -->

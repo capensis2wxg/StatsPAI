@@ -1,0 +1,226 @@
+# 因果文本——方法族指南（实验性，v1.6 MVP）
+
+> 当处理变量是文本时，或处理指标由 LLM 生成时，如何进行因果估计。
+
+## 适用场景
+
+- 你的处理变量、混杂因素或结果变量是**非结构化文本**
+  （评论、投诉、陈述、文章等）。
+- 你使用了 **LLM**（或任何不完美的分类器）来生成二元标签，并希望校正下游系数的偏差。
+- 你现在需要一个**可靠的 MVP**，而不是一个需要花一周时间调试的深度神经网络流水线。
+
+## 状态
+
+**实验性。**v1.6 提供两种方法；方法族中的其他功能
+（基于主题模型的文本作为混杂因素、文本作为结果、完整 Veitch
+CEVAE）计划在 v1.7 中推出。两个估计器都会通过
+`result.diagnostics["status"] == "experimental"` 标明自身状态。
+
+## 函数
+
+| 函数 | 处理变量类型 | 方法 |
+|----------|---------------|--------|
+| `sp.text_treatment_effect` | 文本派生（二元或连续） | 使用嵌入投影进行调整的 OLS（Veitch-Wang-Blei 2020 MVP） |
+| `sp.llm_annotator_correct` | 二元，由 LLM 标注 | 类 Hausman 测量误差校正（Egami et al. 2024） |
+
+## 决策树
+
+```
+处理变量是否由文本派生？
+├── 否，但标签由 LLM 生成？
+│   └── sp.llm_annotator_correct  ← 使用验证集进行偏差校正
+└── 是，处理变量本身就是文本？
+    └── sp.text_treatment_effect  ← 基于嵌入投影的 OLS
+```
+
+## 快速入门：文本作为处理变量
+
+```{python}
+#| label: causal-text-end-to-end
+#| eval: true
+import statspai as sp
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(0)
+n = 120
+positive = rng.binomial(1, 0.5, size=n)
+df = pd.DataFrame({
+    "review_text": np.where(
+        positive == 1,
+        "great product, will buy again",
+        "poor quality, would not buy again",
+    ),
+    "purchased": rng.binomial(1, 0.25 + 0.5 * positive),
+    "positive": positive,
+})
+
+result = sp.text_treatment_effect(
+    df,
+    text_col="review_text",
+    outcome="purchased",
+    treatment="positive",
+    n_components=20,        # hash embedder dimensionality
+    embedder="hash",        # 'hash' (default), 'sbert', or callable
+)
+
+print(result.summary())
+# TextTreatmentResult (experimental)
+# ============================================================
+#   Method            : text_treatment_effect
+#   Estimand          : ATE
+#   Estimate          : 0.4521
+#   SE                : 0.0382
+#   95% CI            : [0.3772, 0.5270]
+#   Embedding dim     : 20
+#   Embedder          : hash
+#   Status            : experimental
+```
+
+### 嵌入器选项
+
+| 值 | 行为 | 依赖项 |
+|-------|-----------|------------|
+| `'hash'`（默认） | 确定性哈希向量化器；多次运行结果一致 | 无 |
+| `'sbert'` | `sentence-transformers/all-MiniLM-L6-v2` | `pip install sentence-transformers` |
+| `callable` | 自定义 `f(texts) -> np.ndarray` | 由你自行负责 |
+
+### 注意事项（文本作为处理变量）
+
+1. **强假设**：所有基于文本的混杂都由嵌入投影捕获。MVP 使用一个共享的低维空间；完整的 Veitch et al. (2020) 方法采用 CEVAE，将处理和结果相关子空间分开。
+2. **哈希嵌入器较粗糙**：适用于原型验证；预算充足时请改用
+   `embedder='sbert'`。
+3. **不支持非线性结果模型**：仅支持线性 OLS。对于非线性结果，可将嵌入作为特征，接入你自己的 DML 流水线进行后续处理。
+
+## 快速入门：LLM 标注的测量误差校正
+
+```python
+import statspai as sp
+import pandas as pd
+import numpy as np
+
+# 10000 LLM-labelled rows; 200 hand-labelled validation rows
+T_llm = pd.Series(...)        # binary
+y     = pd.Series(...)
+human = pd.Series(...)        # NaN where unavailable; ~200 valid
+
+result = sp.llm_annotator_correct(
+    annotations_llm=T_llm,
+    annotations_human=human,   # required
+    outcome=y,
+    method="hausman",
+)
+
+print(result.summary())
+# LLMAnnotatorResult (experimental)
+# ============================================================
+#   Method            : llm_annotator_correct
+#   Estimand          : ATE
+#   Naive estimate    : 0.6445 (SE = 0.0561)
+#   Correction factor : 0.6218
+#   Corrected estimate: 1.0366 (SE = 0.0902)
+#   Validation N      : 200
+#   Agreement rate    : 0.8100
+#   P(T_obs=1|T=0)    : 0.1818
+#   P(T_obs=0|T=1)    : 0.1964
+#   SE correction     : first_order
+#   Status            : experimental
+```
+
+### Hausman 校正的工作原理
+
+对二元 `T_obs` 进行 `y` 的 OLS 回归时，系数会因误分类率而衰减：
+
+```
+β_obs = (1 - p_01 - p_10) · β_true
+```
+
+在经过人工验证、同时包含 LLM 和人工标签的子样本上估计
+`p_01` 和 `p_10`，然后进行除法校正：
+
+```
+β_corrected = β_obs / (1 - p_01 - p_10)
+```
+
+### 注意事项（LLM 标注器）
+
+1. **验证集大小很重要**：至少需要 30 行，同时具备两种标签；理想情况下应有数百行，以确保校正稳定。
+2. **一阶标准误校正**：按相同因子放大标准误，但忽略了根据验证集估计 `p_01` / `p_10` 带来的额外不确定性。如需保守推断，请手动进一步放大标准误。
+3. **v1.6 仅支持二元处理变量**。连续处理变量校正（回归校准）已列入路线图。
+4. **如果 `1 - p_01 - p_10 ≤ 0`**，说明 LLM 对真实标签没有信息，该函数会引发 `IdentificationFailure`。
+
+## 面向智能体
+
+- **前置条件**：
+  - `text_treatment_effect`：文本/结果/处理变量列必须存在；`n_obs >= max(20, n_components+4)`。
+  - `llm_annotator_correct`：至少有 30 行验证数据，且覆盖 `T_human` 的两个类别。
+- **`DataInsufficient` 的恢复措施**：
+  - 文本方法 → 减少 `n_components` 或提供更多行。
+  - 标注器方法 → 增加人工标注数据。
+- **`IdentificationFailure` 的恢复措施**（标注器）：LLM 的表现基本相当于随机猜测；可以重新设计提示词，或为全样本进行人工标注。
+- **确定性**：使用 `embedder='hash'` 并固定 `seed` 时，输出可逐位复现。
+- **不调用外部网络**：这两种方法均可独立运行。
+
+## 参考文献
+
+- Veitch, V., Sridhar, D., & Blei, D. M. (2019). “Adapting text embeddings for causal inference.” *UAI*. [arXiv:1905.12741](https://arxiv.org/abs/1905.12741)。
+- Egami, N., Hinck, M., Stewart, B., & Wei, H. (2024). “Using imperfect surrogates for downstream inference: Design-based supervised learning for social science applications of large language models.” *NeurIPS*. [arXiv:2306.04746](https://arxiv.org/abs/2306.04746)。
+- Hausman, J., Abrevaya, J., & Scott-Morton, F. (1998). “Misclassification of the dependent variable in a discrete-response setting.” *Journal of Econometrics*, 87, 239–269。
+- Aigner, D. J. (1973). “Regression with a binary independent variable subject to errors of observation.” *Journal of Econometrics*, 1(1), 49–59。
+- Roberts, M. E., Stewart, B. M., & Nielsen, R. A. (2020). “Adjusting for confounding with text matching.” *American Journal of Political Science*.（尚未实现——计划在 v1.7 中推出。）
+
+<!-- AGENT-BLOCK-START: text_treatment_effect locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- 数据包含文本/结果/处理变量列
+- n_obs >= max(20, n_components+4)
+
+**识别假设**
+- 所有文本派生的混杂都由嵌入捕获
+- 给定嵌入+协变量后，处理变量条件外生
+- 结果变量关于处理变量呈线性关系（HC1 OLS）
+
+**失败模式 → 恢复措施**
+
+| 现象 | 异常 | 处理方法 | 接下来尝试 |
+| --- | --- | --- | --- |
+| DataInsufficient: 'Need at least N rows' | `statspai.DataInsufficient` | 减少 n_components 或提供更多数据 |  |
+| embedder='sbert' 时发生 ImportError | `ImportError` | 安装 sentence-transformers：`pip install sentence-transformers`，或使用 embedder='hash' | `embedder='hash'` |
+
+**替代方法（按优先顺序）**
+- `sp.regress`：不进行文本调整的普通 OLS
+- `sp.dml`：手动构造文本特征后进行双重机器学习
+
+**典型最小 N**：200
+
+<!-- AGENT-BLOCK-END -->
+
+<!-- AGENT-BLOCK-START: llm_annotator_correct locale=zh-CN -->
+
+## 面向智能体
+
+**前置条件**
+- annotations_llm 为二元值（0/1）
+- 至少 30 行同时包含 LLM 和人工标签
+- 验证集中包含两种 T_human 类别
+
+**识别假设**
+- 二元处理指标
+- 给定 T 后，误分类与结果独立
+- 验证子集能够代表完整样本
+
+**失败模式 → 恢复措施**
+
+| 现象 | 异常 | 处理方法 | 接下来尝试 |
+| --- | --- | --- | --- |
+| DataInsufficient: 'At least 30 validation rows' | `statspai.DataInsufficient` | 增加人工标注行数，使 annotations_human 至少有 30 个非 NaN 项，且涵盖两个类别 |  |
+| IdentificationFailure: '1-p_01-p_10 <= 0' | `statspai.IdentificationFailure` | 误分类过于严重——重新设计 LLM 提示词或改为人工标注 |  |
+
+**替代方法（按优先顺序）**
+- `sp.regress`：直接使用未经校正的 LLM 标签（存在偏差，仅供比较）
+
+**典型最小 N**：300
+
+<!-- AGENT-BLOCK-END -->

@@ -1,0 +1,39 @@
+# API 参考 — 概览
+
+StatsPAI 在统一的 `import statspai as sp` 命名空间下提供 550 多个顶层函数。参考文档按方法领域分类：
+
+| 领域 | 页面 | 代表性函数 |
+| --- | --- | --- |
+| 双重差分 | [did](did.qmd) | `callaway_santanna`, `aggte`, `sun_abraham`, `bjs`, `dcdh`, `etwfe`, `cs_report`, `honest_did`, `breakdown_m` |
+| 回归不连续设计 | [rd](rd.qmd) | `rdrobust`, `rd2d`, `rkd`, `rdit`, `rdhonest`, `rdrandinf`, `rdpower`, `rd_forest`, `rdsummary` |
+| 合成控制 | [synth](synth.qmd) | `synth`, `sdid`, `ascm`, `bayesian_synth`, `bsts_synth`, `penscm`, `synth_compare`, `synth_recommend`, `synth_report` |
+| 分解分析 | [decomposition](decomposition.qmd) | `decompose`, `oaxaca`, `gelbach`, `ffl_decompose`, `dfl_decompose`, `machado_mata`, `shapley_inequality`, `gap_closing` |
+| 随机前沿分析 | [frontier](frontier.qmd) | `frontier`, `xtfrontier`, `zisf`, `lcsf`, `malmquist`, `translog_design`, `te_summary` |
+| 多层 / 混合效应模型 | [multilevel](multilevel.qmd) | `mixed`, `melogit`, `mepoisson`, `meglm`, `megamma`, `menbreg`, `meologit`, `icc`, `lrtest` |
+| 双重 / 去偏机器学习 | [dml](dml.qmd) | `dml` (PLR / IRM / PLIV)、交叉拟合、影响函数标准误 |
+| 因果机器学习 | [causal](causal.qmd) | `causal_forest`, `s_learner` … `dr_learner`, `tmle`, `tarnet`, `dragonnet`, `notears`, `policy_tree`, `bcf` |
+| 敏感性分析 | [sensitivity](sensitivity.qmd) | `oster`, `sensemakr`, `e_value`, `rosenbaum_bounds`, `manski_bounds`, `spec_curve`, `robustness_report` |
+| 智能工作流 | [smart](smart.qmd) | `recommend`, `compare_estimators`, `assumption_audit`, `verify`, `verify_benchmark` |
+| 空间计量经济学 | [spatial](spatial.qmd) | `spatial_weights`, `moran_i`, `geary_c`, `sar`, `sem`, `sdm`, `gwr`, `mgwr`, `spatial_panel` |
+| 时间序列 | [timeseries](timeseries.qmd) | `arima`, `var`, `bvar`, `garch`, `cointegration`, `local_projections`, `structural_break` |
+| 生存分析 | [survival](survival.qmd) | `cox`, `aft`, `frailty`, `kaplan_meier`, `log_rank_test`, `competing_risks` |
+
+所有结果对象都遵循相同的接口：
+
+```python
+r = sp.someestimator(...)
+r.summary()          # 文本表格
+r.plot()             # matplotlib 图形
+r.to_latex()         # LaTeX 代码片段
+r.to_docx()          # Word 段落
+r.cite()             # 方法主要参考文献的 BibTeX
+r.to_markdown()      # Markdown 表格（大多数结果）
+```
+
+面向 Agent 的方法发现接口：
+
+```python
+sp.list_functions(category='rd')         # 列出回归不连续设计方法
+sp.describe_function('rdrobust')         # 返回自然语言函数文档摘要
+sp.function_schema('dml')                # 参数与返回值的 JSON schema
+```

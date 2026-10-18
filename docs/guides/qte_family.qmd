@@ -1,0 +1,268 @@
+# 分位数和分布处理效应——完整方法家族
+
+> **“当处理会重新分配结果时，ATE 可能具有误导性。”**
+> 一项政策可能在均值不变的同时压缩或扩展结果分布——只有 QTE 和分布处理效应才能捕捉到这些变化。
+> StatsPAI v1.4 提供了完整的 2025–2026 年前沿方法。
+
+平均处理效应回答：“结果均值变化了多少？”但在政策、临床和公平性研究中，你通常更关心**哪些人**的结果发生了变化。底部十分位的人群是否获益？处理是否扩大了不平等？这些问题需要分位数效应或分布效应。
+
+以下所有函数都位于顶层：`sp.qdid`、`sp.qte`、
+`sp.distributional_te`、`sp.dist_iv`、`sp.kan_dlate`、
+`sp.beyond_average_late`、`sp.qte_hd_panel`、`sp.cic`。
+
+---
+
+## 三种粒度
+
+| 层级                  | 回答的问题                                  | 估计器                     |
+|------------------------|--------------------------------------------------|----------------------------------|
+| 平均效应                | “均值是否上升？”                            | `sp.did`、`sp.iv`、`sp.dml`      |
+| 分位数（第 τ 分位）         | “底部 10%？中位数？顶部 10%？”  | `sp.qte`、`sp.qdid`、`sp.cic`    |
+| 整个分布     | “分布的*形状*发生了怎样的变化？”                    | `sp.distributional_te`、`sp.dist_iv` |
+
+---
+
+## 无混杂条件下的条件 QTE——`sp.qte`
+
+当你拥有足以支持可观测变量选择的丰富 `X` 的观测性数据时，这是默认选择：
+
+```python
+r = sp.qte(
+    data=df, y="wage", treatment="job_program",
+    controls=["age", "education", "experience"],
+    quantiles=[0.1, 0.25, 0.5, 0.75, 0.9],
+    method="quantile_regression",   # or "ipw"
+    n_boot=500,
+)
+r.plot()    # QTE curve with bootstrap uniform band
+```
+
+参考文献：Firpo (2007), *Econometrica* 75(1)。IPW 变体：Firpo (2007)
+§4，使用倾向得分。
+
+---
+
+## 分位数 DiD——`sp.qdid`
+
+在两个时期、两个组别下，针对每个分位数估计 DiD。平行趋势假设替换为**分位数平行趋势**假设：“若未接受处理，处理组的第 τ 分位数会与对照组的第 τ 分位数以相同幅度变化。”
+
+```python
+r = sp.qdid(
+    data=df, y="y", group="treated", time="post",
+    quantiles=[0.1, 0.25, 0.5, 0.75, 0.9],
+    n_boot=500,
+)
+r.summary()     # QTE(τ) for each τ with placebo-based CI
+```
+
+参考文献：Athey & Imbens (2006), *Econometrica* 74(2)。
+
+---
+
+## 变化中的变化（CiC）——`sp.cic`
+
+CiC 的假设弱于 QDiD：它只要求在没有处理的情况下，随着时间推移，各组结果分布中每个个体的**秩次**保持稳定。不需要平行趋势。当不同组的结果分布形状不同时也适用。
+
+```python
+r = sp.cic(
+    data=df, y="earnings", group="treated", time="post",
+    quantiles=np.linspace(0.05, 0.95, 19),
+    n_boot=500,
+)
+```
+
+参考文献：Athey & Imbens (2006), *Econometrica*。同一篇论文证明，当各分布恰好具有相同尺度时，CiC 包含 QDiD 作为特例。
+
+---
+
+## 分布处理效应（完整密度/CDF）——`sp.distributional_te`
+
+`distributional_te` 不只是估计若干分位点上的 QTE 曲线，而是估计完整的反事实 CDF：
+
+```python
+r = sp.distributional_te(
+    data=df, y="income", treatment="program",
+    x=["age", "education"],
+    method="ipw",           # or "regression"
+    n_grid=200,
+    n_boot=500,
+)
+r.plot_cdf()    # control CDF vs counterfactual-under-treatment CDF
+r.plot_pdf()    # with bootstrap uniform band
+```
+
+**适用场景**：你关心随机占优的结论（“处理组随机一阶占优于对照组”）或洛伦兹曲线式的不平等概述。
+
+---
+
+## 分布 IV——`sp.dist_iv`（Sharma-Xue 2025）
+
+针对每个分位数估计 IV，并计算 τ 上的一致置信带：
+
+```python
+r = sp.dist_iv(
+    data=df, y="earnings", treat="schooling",
+    instrument="compulsory_reform",
+    covariates=["age", "region"],
+    quantiles=np.linspace(0.1, 0.9, 17),
+    n_boot=200,
+)
+```
+
+**识别**：该方法将 Abadie (2002) 的服从者条件下 QTE 推广到连续的 τ 网格，并提供覆盖整个 τ 区间的一致置信覆盖率。因此，你可以报告“受教育年限在所有分位数上都提高了工资”或“最高十分位的回报是最低十分位的两倍”。
+
+引文：Holovchak, Saengkyongam, Meinshausen & Shen (2025), arXiv:2502.07641。
+
+---
+
+## KAN D-LATE——`sp.kan_dlate`（Kennedy 等, 2025）
+
+这是由 Kolmogorov-Arnold 网络驱动的 `dist_iv` 变体，以灵活的 KAN 曲面替代线性桥函数。调用形式与 `dist_iv` 相同；当你认为处理 `D` 的回报（例如受教育年限回报）具有明显非线性时，可改用此方法。
+
+```python
+r = sp.kan_dlate(
+    data=df, y="y", treat="d", instrument="z",
+    covariates=["x1", "x2"],
+    quantiles=np.linspace(0.1, 0.9, 9),
+)
+```
+
+引文：Shaw (2025), arXiv:2506.12765。
+
+---
+
+## 超越平均 LATE——`sp.beyond_average_late`（Xie-Wu 2025）
+
+Angrist-Imbens LATE 给出的是*服从者*（工具变量变化时处理状态会随之改变的个体）的处理效应。但它只是服从者子群体上的一个*平均值*。Xie-Wu 识别的是服从者处理效应的**完整分布**：
+
+```python
+r = sp.beyond_average_late(
+    data=df, y="y", treat="d", instrument="z",
+    quantiles=np.linspace(0.1, 0.9, 9),
+    n_boot=200,
+)
+```
+
+**适用情形**：如果服从者类别中的处理效应分布具有厚尾，那么平均 LATE 会掩盖由十分位或分位数概述揭示的异质性。一个经典例子是：受教育年限的回报会因服从者能力不同而有显著差异。
+
+引文：Byambadalai, Hirata, Oka & Yasui (2025), arXiv:2509.15594。
+
+---
+
+## 高维面板 QTE——`sp.qte_hd_panel`（Fan 等, 2025）
+
+面板数据中有很多协变量？`qte_hd_panel` 会对每个 τ 拟合一个经 ℓ1 惩罚的分位数回归，并通过 Lasso 进行干扰项估计：
+
+```python
+r = sp.qte_hd_panel(
+    data=df, y="y", treat="d",
+    unit="county", time="year",
+    covariates=[f"x{j}" for j in range(50)],
+    quantiles=np.linspace(0.1, 0.9, 9),
+    lasso_alpha=0.01,
+)
+```
+
+**适用场景**：控制变量很多（大约 `p ≥ 20`）、识别采用面板 DiD 风格，并且你关心 τ 曲线。诚实的后 Lasso 推断遵循 Belloni-Chernozhukov-Fernández-Val (2017)。
+
+引文：Xu & Zheng (2025), arXiv:2504.00785。
+
+---
+
+## 决策指南
+
+```
+横截面数据 + 无混杂性：
+  ATE only             → sp.dml / sp.aipw
+  QTE at some τ        → sp.qte
+  Full distribution    → sp.distributional_te
+
+DiD design:
+  Mean ATT             → sp.did
+  QTE(τ) at each τ     → sp.qdid
+  Rank-preserving      → sp.cic
+
+IV design:
+  LATE (mean)          → sp.iv
+  Distributional LATE  → sp.dist_iv (linear) / sp.kan_dlate (KAN)
+  Beyond-average LATE  → sp.beyond_average_late (distribution among compliers)
+
+包含大量控制变量的面板数据：
+  → sp.qte_hd_panel
+```
+
+---
+
+## 应报告的合理性检查
+
+1. **τ 上的单调性**——QTE 曲线应随 τ 平滑变化；剧烈波动意味着过拟合或不稳定。
+2. **一致置信带覆盖率**——报告 Kolmogorov-Smirnov 风格的一致置信带，而不只是每个 τ 上的逐点 CI。
+3. **随机占优检验**——`sp.stochastic_dominance(r)` 可检验处理组 CDF 是否一阶随机占优于对照组。
+4. **共同支持诊断**——对于基于 IV/IPW 的 QTE，需验证所报告的*每一个* τ 上的倾向得分重叠。
+
+---
+
+*适用于 StatsPAI ≥ 1.5.0。所有函数均已注册；可使用 `sp.describe_function("beyond_average_late")` 等查看。*
+
+<!-- AGENT-BLOCK-START: qte locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 二元或连续处理（`method='quantile_regression'` 两者均支持；`'ipw'` 需要二元处理）
+- 连续结果变量
+- 对于 `quantile_regression`，控制变量需涵盖混杂因素集合
+- 使用 `method='ipw'` 时需要满足重叠条件
+
+**识别假设**
+- 对于 `quantile_regression`：给定控制变量后满足无混杂
+- 对于 `ipw`：无混杂 + 重叠条件 0 < e(x) < 1
+- 参数化分位数模型正确（通过多个分位数的敏感性分析进行检验）
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| IPW 权重过大（`method='ipw'`） | `statspai.AssumptionViolation` | 倾向得分极端——进行截尾（sp.trimming）或切换到双重稳健 DR-QTE。 | `sp.trimming` |
+| 分位数交叉 | `statspai.AssumptionWarning` | 使用重排方法（Chernozhukov-Fernandez-Val-Galichon）或单调性约束。 |  |
+
+**备选方案（按优先级排序）**
+- `sp.qdid`
+- `sp.rifreg`
+- `sp.cic`
+- `sp.metalearner`
+
+**典型最小 N**：500
+
+<!-- AGENT-BLOCK-END -->
+
+<!-- AGENT-BLOCK-START: qdid locale=zh-CN -->
+
+## 代理须知
+
+**前置条件**
+- 面板数据或重复横截面数据
+- group 为二元变量 0/1
+- time 为二元变量 0/1（处理前/处理后）
+- 结果变量为连续变量
+
+**识别假设**
+- CIC 秩不变性：未处理结果分布中的分位秩在组别间保持稳定
+- 连续结果变量的支持集覆盖两个时期的两个组别
+- SUTVA（组间无溢出）
+
+**失败模式 → 恢复措施**
+
+| 症状 | 异常 | 修复方法 | 下一步尝试 |
+| --- | --- | --- | --- |
+| 结果高度离散或零膨胀 | `statspai.AssumptionViolation` | 离散支持集上的 CIC 秩匹配不稳定——改用 QTE 回归（sp.qte）或 Firpo-RIF。 | `sp.qte` |
+| 各分位数的 Bootstrap CI 波动很大 | `statspai.DataInsufficient` | 极端分位数尾部样本稀疏——将范围限制为 [0.2, 0.8]，或将 n_boot 提高到 2000。 |  |
+
+**备选方案（按优先级排序）**
+- `sp.qte`
+- `sp.did`
+- `sp.rifreg`
+
+**典型最小 N**：500
+
+<!-- AGENT-BLOCK-END -->
